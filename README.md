@@ -33,7 +33,7 @@ Multi brings external models and coding harnesses into one Claude Code session t
 In Claude Code, add the marketplace and install the providers you want:
 
 ```text
-/plugin marketplace add greenpolo/cc-multi-cli-plugin
+/plugin marketplace add leedrin/cc-multi-cli-plugin
 /plugin install multi-openai@cc-multi-cli-plugin
 /plugin install multi-cursor@cc-multi-cli-plugin
 /plugin install multi-zen@cc-multi-cli-plugin
