@@ -138,3 +138,62 @@ test('a completion without usage is traced as absent, and tracing is off by defa
   });
   assert.deepEqual(await traced(undefined, { input_tokens: 1, output_tokens: 1 }), []);
 });
+
+test('a session with a prompt, reasoning and a tool call traces counts and none of its content', async () => {
+  const previous = process.env.MULTI_USAGE_TRACE;
+  process.env.MULTI_USAGE_TRACE = '1';
+  const write = mock.method(process.stderr, 'write', () => true);
+  try {
+    await fromResponses(
+      sse([
+        created,
+        {
+          type: 'response.completed',
+          response: {
+            id: 'resp',
+            output: [
+              {
+                type: 'reasoning',
+                id: 'rs',
+                summary: [{ type: 'summary_text', text: 'REASONING-TEXT' }],
+                encrypted_content: 'ENCRYPTED-STATE',
+              },
+              message,
+              {
+                type: 'function_call',
+                call_id: 'call_1',
+                name: 'Read',
+                arguments: '{"file_path":"TOOL-ARG-SECRET"}',
+              },
+            ],
+            usage: { input_tokens: 10, output_tokens: 5 },
+          },
+        },
+      ]),
+      'multi/openai/gpt',
+      undefined,
+      { toolNames: new Map([['Read', 'Read']]) },
+    );
+    const output = write.mock.calls.map((call) => String(call.arguments[0])).join('');
+    assert(output.length > 0);
+    for (const secret of [
+      'SECRET-ANSWER',
+      'REASONING-TEXT',
+      'ENCRYPTED-STATE',
+      'TOOL-ARG-SECRET',
+      'call_1',
+      'Authorization',
+      'Bearer',
+      'x-multi-gateway-token',
+    ]) {
+      assert(!output.includes(secret), secret);
+    }
+  } finally {
+    write.mock.restore();
+    if (previous === undefined) {
+      delete process.env.MULTI_USAGE_TRACE;
+    } else {
+      process.env.MULTI_USAGE_TRACE = previous;
+    }
+  }
+});

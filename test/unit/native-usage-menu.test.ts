@@ -51,7 +51,7 @@ function flatten(element: Element): Element[] {
 }
 
 /** The usage hooks over a fake engine that records every gateway read and pane call. */
-async function paneHarness(options: { receiptsFail?: boolean } = {}) {
+async function paneHarness(options: { receiptsFail?: boolean; trace?: string[] } = {}) {
   const requests: string[] = [];
   const closed: string[] = [];
   let session = 'session/one';
@@ -72,7 +72,12 @@ async function paneHarness(options: { receiptsFail?: boolean } = {}) {
   );
   const engine = {
     env: {
-      get: async (name: string) => (name === 'MULTI_GATEWAY_TOKEN' ? 'secret' : 'http://localhost'),
+      get: async (name: string) => {
+        if (name === 'MULTI_UI_TRACE') {
+          return options.trace ? '1' : undefined;
+        }
+        return name === 'MULTI_GATEWAY_TOKEN' ? 'secret' : 'http://localhost';
+      },
     },
     session: { id: async () => session },
     http: {
@@ -105,6 +110,9 @@ async function paneHarness(options: { receiptsFail?: boolean } = {}) {
         closed.push(args.id);
       },
       invalidate: () => {},
+      log: (text: string) => {
+        options.trace?.push(text);
+      },
       resolve: async () => factories,
     },
   };
@@ -266,6 +274,37 @@ test('the pane ignores another pane, another surface and elements that are not i
       (button) => button.props.key === 'tab:all' && button.props.autoFocus === true,
     ),
   );
+});
+
+test('UI trace records focus, scroll and close as metadata and names no session', async () => {
+  const lines: string[] = [];
+  const secret = 'session/one';
+  const harness = await paneHarness({ trace: lines });
+  await harness.open();
+  await harness.focus('provider:openai');
+  await harness.scroll(5);
+  await harness.press('action:refresh');
+  await harness.close();
+  const parsed = lines.map((line) => JSON.parse(line.replace(/^multi-usage /, '')));
+  assert.deepEqual(
+    parsed.filter((line) => line.event !== 'ui.render'),
+    [
+      { event: 'pane.open', requested: true, placed: true },
+      { event: 'ui.focus', requestId: 'multi-usage', element: 'provider:openai' },
+      { event: 'ui.scroll', requestId: 'multi-usage', by: 5 },
+      {
+        event: 'ui.press',
+        surface: 'terminal',
+        requestId: 'multi-usage',
+        element: 'action:refresh',
+      },
+      { event: 'ui.close', requestId: 'multi-usage' },
+    ],
+  );
+  const all = lines.join('\n');
+  for (const text of [secret, encodeURIComponent(secret), 'secret', 'native spend', 'quota ok']) {
+    assert(!all.includes(text), text);
+  }
 });
 
 test('Close closes the pane and forgets its state; a host close does too', async () => {

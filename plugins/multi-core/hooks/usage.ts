@@ -98,11 +98,22 @@ export const register = (
     const elements = await $.ui.resolve(event);
     state.columns = event.props.bodyColumns;
     state.rows = event.props.scroll?.bodyRows ?? state.rows;
+    await uiTrace($, {
+      event: 'ui.render',
+      surface: event.surface,
+      requestId: event.requestId,
+      columns: state.columns,
+    });
     return renderPane(elements, state);
   });
   // The focus ring walks the tabs: where it lands is the provider shown.
   on('ui.focus', { component: 'Pane', requestId: PANE_ID }, async ($, event, next) => {
     const result = await next(event);
+    await uiTrace($, {
+      event: 'ui.focus',
+      requestId: event.requestId,
+      ...(event.element === undefined ? {} : { element: event.element }),
+    });
     const session = await $.session.id();
     const state = panes.get(session);
     const selection = state ? selectionOf(event.element, state.props) : undefined;
@@ -112,6 +123,12 @@ export const register = (
     return result;
   });
   on('ui.press', { component: 'Pane', requestId: PANE_ID }, async ($, event, next) => {
+    await uiTrace($, {
+      event: 'ui.press',
+      surface: event.surface,
+      requestId: event.requestId,
+      element: event.element,
+    });
     const session = await $.session.id();
     const state = panes.get(session);
     if (state) {
@@ -120,6 +137,7 @@ export const register = (
     return next(event);
   });
   on('ui.scroll', { component: 'Pane', requestId: PANE_ID }, async ($, event, next) => {
+    await uiTrace($, { event: 'ui.scroll', requestId: event.requestId, by: event.by });
     const state = panes.get(await $.session.id());
     if (state) {
       state.rows = event.bodyRows;
@@ -129,10 +147,43 @@ export const register = (
     return next(event);
   });
   on('ui.close', { id: PANE_ID }, async ($, event, next) => {
+    await uiTrace($, { event: 'ui.close', requestId: event.id });
     panes.delete(await $.session.id());
     return next(event);
   });
 };
+
+/** What the usage pane may say about itself: where it is, what moved, what was pressed. */
+type UiTraceFields = {
+  event: string;
+  surface?: string;
+  requestId?: string;
+  element?: string;
+  requested?: boolean;
+  placed?: boolean;
+  reason?: string;
+  by?: number;
+  columns?: number;
+};
+
+const REASON_LIMIT = 200;
+
+/**
+ * Writes one metadata line to the debug log when `MULTI_UI_TRACE=1`, and nothing otherwise.
+ * The fields are a closed set: no session id, prompt, dashboard text, header or token can be
+ * passed in, because the type has nowhere to put them. It stays in this file because the
+ * hook compiler follows `$` only into functions declared here.
+ */
+async function uiTrace($: EngineInterface, fields: UiTraceFields): Promise<void> {
+  if ((await $.env.get('MULTI_UI_TRACE')) !== '1') {
+    return;
+  }
+  const line = {
+    ...fields,
+    ...(fields.reason === undefined ? {} : { reason: fields.reason.slice(0, REASON_LIMIT) }),
+  };
+  $.ui.log(`multi-usage ${JSON.stringify(line)}`, { to: 'debug' });
+}
 
 const receiptsRoute = (session: string) =>
   `/multi/mod/receipts?sessionId=${encodeURIComponent(session)}`;
@@ -244,8 +295,15 @@ async function openPane(
     });
   } catch {
     panes.delete(session);
+    await uiTrace($, { event: 'pane.open', requested: true, placed: false, reason: 'open failed' });
     return renderUsageText(response);
   }
+  await uiTrace($, {
+    event: 'pane.open',
+    requested: true,
+    placed: opened?.isPlaced !== false,
+    ...(opened?.isPlaced === false ? { reason: opened.reason } : {}),
+  });
   if (opened?.isPlaced !== false) {
     return undefined;
   }
