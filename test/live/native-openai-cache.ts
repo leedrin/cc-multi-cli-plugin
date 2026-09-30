@@ -7,6 +7,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { AgentCatalog } from '../../plugins/multi-core/src/gateway/agent-catalog.ts';
 import type { MessagesResponse } from '../../plugins/multi-core/src/gateway/messages.ts';
+import { ProviderUsageDashboard } from '../../plugins/multi-core/src/gateway/provider-usage.ts';
+import { ReceiptLedger } from '../../plugins/multi-core/src/gateway/receipts.ts';
 import { createNativeGateway } from '../../plugins/multi-core/src/gateway/server.ts';
 import type { ResponsesRequest } from '../../plugins/multi-openai/src/responses.ts';
 import { readSse } from '../../plugins/multi-openai/src/responses.ts';
@@ -22,6 +24,10 @@ interface Sample {
   input: number;
   cached: number;
   output: number;
+  /** Reported by the provider or left unset: never a guessed zero. */
+  cacheWrite?: number;
+  reasoning?: number;
+  total?: number;
 }
 interface ClaudeResult {
   type: string;
@@ -64,6 +70,13 @@ const catalog = new AgentCatalog(workers, ['multi/openai/gpt-6-astra']);
 const session = randomUUID();
 const token = randomUUID();
 const samples: Sample[] = [];
+// One ledger and one deterministic dashboard for the whole probe: the session's usage is read back
+// through the authenticated route after every turn and must match the raw terminal events.
+const receipts = new ReceiptLedger();
+const usageDashboard = new ProviderUsageDashboard({
+  enabled: ['openai'],
+  openai: async () => ({ summary: 'deterministic probe reader', details: [] }),
+});
 const observations: Promise<void>[] = [];
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const authFile = path.join(
@@ -87,7 +100,9 @@ async function observe(response: Response, sample: Sample) {
         usage: {
           input_tokens: number;
           output_tokens: number;
-          input_tokens_details: { cached_tokens: number };
+          total_tokens?: number;
+          input_tokens_details: { cached_tokens: number; cache_write_tokens?: number };
+          output_tokens_details?: { reasoning_tokens?: number } | null;
         };
       };
     };
@@ -95,6 +110,9 @@ async function observe(response: Response, sample: Sample) {
       sample.input = event.response.usage.input_tokens;
       sample.cached = event.response.usage.input_tokens_details.cached_tokens;
       sample.output = event.response.usage.output_tokens;
+      sample.cacheWrite = event.response.usage.input_tokens_details.cache_write_tokens;
+      sample.reasoning = event.response.usage.output_tokens_details?.reasoning_tokens;
+      sample.total = event.response.usage.total_tokens;
       console.log(JSON.stringify(sample));
     }
   }
@@ -151,6 +169,81 @@ function terminalResponse(response: Response) {
     }),
     { headers: response.headers },
   );
+}
+
+/** The sum of a field over samples, or nothing when any sample did not report it. */
+function sumOf(list: Sample[], pick: (sample: Sample) => number | undefined): number | undefined {
+  let total = 0;
+  for (const sample of list) {
+    const value = pick(sample);
+    if (value === undefined) {
+      return undefined;
+    }
+    total += value;
+  }
+  return total;
+}
+
+interface Totals {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  reasoning_tokens?: number;
+  total_tokens?: number;
+  cache_read_ratio?: number;
+}
+
+/** What the raw terminal events of these samples add up to, in the ledger's field names. */
+function expectedTotals(list: Sample[]): Totals {
+  const uncached = sumOf(list, (s) => s.input - s.cached - (s.cacheWrite ?? 0));
+  const cached = sumOf(list, (s) => s.cached);
+  const written = sumOf(list, (s) => s.cacheWrite);
+  const denominator = (uncached ?? 0) + (cached ?? 0) + (written ?? 0);
+  return {
+    ...(uncached === undefined ? {} : { input_tokens: uncached }),
+    output_tokens: sumOf(list, (s) => s.output),
+    ...(cached === undefined ? {} : { cache_read_input_tokens: cached }),
+    ...(written === undefined ? {} : { cache_creation_input_tokens: written }),
+    ...(sumOf(list, (s) => s.reasoning) === undefined
+      ? {}
+      : { reasoning_tokens: sumOf(list, (s) => s.reasoning) }),
+    ...(sumOf(list, (s) => s.total) === undefined
+      ? {}
+      : { total_tokens: sumOf(list, (s) => s.total) }),
+    ...(denominator > 0 && cached !== undefined ? { cache_read_ratio: cached / denominator } : {}),
+  };
+}
+
+/** Every layer that carries usage must agree with the provider's own terminal events. */
+async function assertFourLayers(port: number, list: Sample[]) {
+  const expected = expectedTotals(list);
+  const check = (layer: string, actual: Totals) => {
+    for (const [field, value] of Object.entries(expected)) {
+      const got = actual[field as keyof Totals];
+      if (field === 'cache_read_ratio') {
+        assert(
+          typeof got === 'number' && Math.abs(got - Number(value)) < 1e-9,
+          `${layer}.${field}: ${got} != ${value}`,
+        );
+      } else {
+        assert.equal(got, value, `${layer}.${field}`);
+      }
+    }
+  };
+  check('ledger', receipts.snapshot(session).totals);
+  const response = await fetch(
+    `http://127.0.0.1:${port}/multi/mod/usage?sessionId=${encodeURIComponent(session)}&view=providers&refresh=true`,
+    { headers: { 'x-multi-gateway-token': token } },
+  );
+  assert.equal(response.status, 200);
+  const view = (await response.json()) as {
+    providers: { id: string; session?: { source: string; consumed: Totals } }[];
+  };
+  const openai = view.providers.find((row) => row.id === 'openai');
+  assert(openai?.session, 'The dashboard has no session usage for OpenAI');
+  assert.equal(openai.session.source, 'provider');
+  check('dashboard', openai.session.consumed);
 }
 
 async function runClaude(port: number, turn: number) {
@@ -238,6 +331,8 @@ for (let turn = 0; turn < 3; turn++) {
     authFile,
     blockAnthropic: true,
     agentCatalog: catalog,
+    receipts,
+    usageDashboard,
     fetchImpl: async (url, init) => {
       assert.equal(url, 'https://chatgpt.com/backend-api/codex/responses');
       assert(samples.length < 6, 'Six-request inference budget exhausted');
@@ -292,6 +387,7 @@ for (let turn = 0; turn < 3; turn++) {
       usage.output_tokens,
       current.reduce((sum, sample) => sum + sample.output, 0),
     );
+    await assertFourLayers(address.port, samples);
   } finally {
     await writeFile(path.join(cwd, 'report.json'), JSON.stringify(samples, null, 2));
     await new Promise<void>((resolve) => server.close(() => resolve()));
