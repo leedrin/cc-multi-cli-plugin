@@ -69,7 +69,12 @@ test('provider dashboard coalesces reads, caches account data, refreshes and kee
     dashboard.read('a', ledger.snapshot(), true),
   ]);
   assert.equal(calls, 1);
-  ledger.observe({ route: 'cursor', session: 'a', usage: { input_tokens: 10, output_tokens: 20 } });
+  ledger.observe({
+    route: 'cursor',
+    session: 'a',
+    usage: { input_tokens: 10, output_tokens: 20 },
+    usageMetadata: { source: 'provider' },
+  });
   const cached = await dashboard.read('a', ledger.snapshot('a'));
   assert.equal(calls, 1);
   assert(

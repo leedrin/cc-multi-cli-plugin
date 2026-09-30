@@ -51,21 +51,22 @@ const unavailable: Record<UsageProvider, string[]> = {
   ],
 };
 
+// Interim: unknown counts read as 0 here until the dashboard reads session usage with source.
 function sessionLines(snapshot: UsageSnapshot, provider: UsageProvider): string[] {
   const entries = snapshot.entries.filter((entry) => entry.provider === provider);
   const totals = { input: 0, output: 0, read: 0, write: 0, requests: 0, calls: 0 };
   for (const entry of entries) {
-    totals.input += entry.usage.input_tokens;
-    totals.output += entry.usage.output_tokens;
-    totals.read += entry.usage.cache_read_input_tokens;
-    totals.write += entry.usage.cache_creation_input_tokens;
+    totals.input += entry.usage.input_tokens ?? 0;
+    totals.output += entry.usage.output_tokens ?? 0;
+    totals.read += entry.usage.cache_read_input_tokens ?? 0;
+    totals.write += entry.usage.cache_creation_input_tokens ?? 0;
     totals.requests += entry.requests;
     totals.calls += entry.usage.model_calls ?? 0;
   }
   const count = (value: number) => value.toLocaleString('en-US');
   const context = snapshot.contexts?.[provider];
   const window = context
-    ? `context ${count(context.input_tokens + context.cache_read_input_tokens + context.cache_creation_input_tokens)} · `
+    ? `context ${count((context.input_tokens ?? 0) + (context.cache_read_input_tokens ?? 0) + (context.cache_creation_input_tokens ?? 0))} · `
     : '';
   const calls = totals.calls ? ` · ${count(totals.calls)} model calls` : '';
   return [

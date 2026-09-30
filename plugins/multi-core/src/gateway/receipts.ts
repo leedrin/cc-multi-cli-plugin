@@ -1,18 +1,24 @@
 import { randomUUID } from 'node:crypto';
 import { appendFile } from 'node:fs/promises';
+import type { MessagesResponse } from './messages.ts';
 import type { GatewayEvent } from './server.ts';
+import {
+  addCanonicalUsage,
+  type CanonicalTokenUsage,
+  cacheReadRatio,
+  createUsageAccumulator,
+  serializeUsageTotals,
+  type UsageAccumulator,
+  type UsageSource,
+  type UsageTotalsV2,
+} from './usage-accounting.ts';
 
-const RECEIPT_SCHEMA_VERSION = 1;
+const RECEIPT_SCHEMA_VERSION = 2;
 
-type Usage = NonNullable<GatewayEvent['usage']> & {
-  reasoning_tokens?: number;
-  total_tokens?: number;
-  model_calls?: number;
-};
+type UsageMetadata = NonNullable<MessagesResponse['multi_usage']>;
 type InvocationEvent = GatewayEvent & {
   invocationId?: string;
   requestId?: string;
-  usageMetadata?: { replayed?: boolean; source?: UsageSource };
 };
 
 export type ReceiptOutcome = 'completed' | 'failed' | 'cancelled';
@@ -24,25 +30,22 @@ export interface InvocationRef {
 }
 
 /**
- * Spend: what the requests consumed. A harness turn's standard usage fields
- * carry its last model call (its live context), so its consumption comes from
- * the `consumed_*` extension fields instead.
+ * Spend: what the requests consumed, as totals that keep what was never reported
+ * out of the record. A harness turn's standard usage fields carry its last model
+ * call (its live context), so its consumption comes from the `consumed_*` fields.
  */
-interface UsageTotals {
-  input_tokens: number;
-  output_tokens: number;
-  cache_read_input_tokens: number;
-  cache_creation_input_tokens: number;
-  reasoning_tokens?: number;
-  total_tokens?: number;
-  model_calls?: number;
-}
+type UsageTotals = UsageTotalsV2;
 
-/** The live context the last response reported: its input side, as Claude Code reads it. */
+/**
+ * The live context the last response reported: its input side, as Claude Code
+ * reads it. An unavailable response is `{ source: 'unavailable' }`, never zeros.
+ */
 interface ContextUsage {
-  input_tokens: number;
-  cache_read_input_tokens: number;
-  cache_creation_input_tokens: number;
+  source: UsageSource;
+  input_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_ratio?: number;
 }
 
 export interface UsageSnapshot {
@@ -56,8 +59,6 @@ export interface UsageSnapshot {
   entries: UsageEntry[];
   truncated?: boolean;
 }
-
-type UsageSource = 'provider' | 'estimate' | 'mixed' | 'unavailable';
 
 interface UsageEntry {
   provider: GatewayEvent['route'];
@@ -103,79 +104,33 @@ export interface ReceiptLedgerOptions {
   maxRecent?: number;
 }
 
+/** The ledger's working state: accumulators, so a count nobody reported stays unknown. */
+interface SnapshotState {
+  requests: number;
+  totals: UsageAccumulator;
+  contexts?: Partial<Record<GatewayEvent['route'], ContextUsage>>;
+  byModel: Record<string, UsageAccumulator>;
+  byEffort: Record<string, UsageAccumulator>;
+  byEndpoint: Record<string, UsageAccumulator>;
+  entries: EntryState[];
+  truncated?: boolean;
+}
+
+interface EntryState extends Omit<UsageEntry, 'usage'> {
+  usage: UsageAccumulator;
+}
+
 interface PendingInvocation {
   ref: InvocationRef;
-  snapshot: UsageSnapshot;
+  state: SnapshotState;
   startedAt: string;
   context?: ContextUsage;
 }
 
-const emptyTotals = (): UsageTotals => ({
-  input_tokens: 0,
-  output_tokens: 0,
-  cache_read_input_tokens: 0,
-  cache_creation_input_tokens: 0,
-});
-
-function addUsage(target: UsageTotals, usage: Usage) {
-  target.input_tokens += usage.input_tokens;
-  target.output_tokens += usage.output_tokens;
-  target.cache_read_input_tokens += usage.cache_read_input_tokens ?? 0;
-  target.cache_creation_input_tokens += usage.cache_creation_input_tokens ?? 0;
-  for (const key of ['reasoning_tokens', 'total_tokens', 'model_calls'] as const) {
-    if (usage[key] !== undefined) {
-      target[key] = (target[key] ?? 0) + usage[key];
-    }
-  }
-}
-
-function keyFor(ref: InvocationRef): string {
-  return JSON.stringify([ref.session ?? null, ref.agentId ?? null]);
-}
-
-function copyTotals(totals: UsageTotals): UsageTotals {
-  return { ...totals };
-}
-
-function copyBreakdown(breakdown: Record<string, UsageTotals>): Record<string, UsageTotals> {
-  return Object.fromEntries(
-    Object.entries(breakdown).map(([name, totals]) => [name, copyTotals(totals)]),
-  );
-}
-
-function copySnapshot(snapshot: UsageSnapshot): UsageSnapshot {
-  return {
-    ...snapshot,
-    requests: snapshot.requests,
-    totals: copyTotals(snapshot.totals),
-    byModel: copyBreakdown(snapshot.byModel),
-    byEffort: copyBreakdown(snapshot.byEffort),
-    byEndpoint: copyBreakdown(snapshot.byEndpoint),
-    entries: snapshot.entries.map((entry) => ({ ...entry, usage: copyTotals(entry.usage) })),
-    ...(snapshot.contexts ? { contexts: structuredClone(snapshot.contexts) } : {}),
-  };
-}
-
-function addBreakdown(
-  breakdown: Record<string, UsageTotals>,
-  name: string | undefined,
-  usage: Usage,
-) {
-  if (!name) {
-    return;
-  }
-  if (!Object.hasOwn(breakdown, name) && Object.keys(breakdown).length >= 256) {
-    return;
-  }
-  const totals = Object.hasOwn(breakdown, name) ? breakdown[name] : emptyTotals();
-  addUsage(totals, usage);
-  breakdown[name] = totals;
-}
-
-function emptySnapshot(): UsageSnapshot {
+function emptyState(): SnapshotState {
   return {
     requests: 0,
-    totals: emptyTotals(),
+    totals: createUsageAccumulator(),
     byModel: {},
     byEffort: {},
     byEndpoint: {},
@@ -183,42 +138,162 @@ function emptySnapshot(): UsageSnapshot {
   };
 }
 
-/** What one response consumed: the harness's turn sums when it reported them. */
-function spend(event: InvocationEvent): Usage {
-  const usage = event.usage as Usage;
+function keyFor(ref: InvocationRef): string {
+  return JSON.stringify([ref.session ?? null, ref.agentId ?? null]);
+}
+
+function serializeBreakdown(
+  breakdown: Record<string, UsageAccumulator>,
+): Record<string, UsageTotals> {
+  return Object.fromEntries(
+    Object.entries(breakdown).map(([name, totals]) => [name, serializeUsageTotals(totals)]),
+  );
+}
+
+function serializeState(state: SnapshotState): UsageSnapshot {
+  return {
+    requests: state.requests,
+    totals: serializeUsageTotals(state.totals),
+    byModel: serializeBreakdown(state.byModel),
+    byEffort: serializeBreakdown(state.byEffort),
+    byEndpoint: serializeBreakdown(state.byEndpoint),
+    entries: state.entries.map((entry) => ({ ...entry, usage: serializeUsageTotals(entry.usage) })),
+    ...(state.contexts ? { contexts: structuredClone(state.contexts) } : {}),
+    ...(state.truncated ? { truncated: true } : {}),
+  };
+}
+
+function addBreakdown(
+  breakdown: Record<string, UsageAccumulator>,
+  name: string | undefined,
+  usage: CanonicalTokenUsage,
+) {
+  if (!name) {
+    return;
+  }
+  if (!Object.hasOwn(breakdown, name) && Object.keys(breakdown).length >= 256) {
+    return;
+  }
+  const totals = Object.hasOwn(breakdown, name) ? breakdown[name] : createUsageAccumulator();
+  addCanonicalUsage(totals, usage);
+  breakdown[name] = totals;
+}
+
+/** The accounting block, read back as canonical usage; an absent count stays unknown. */
+function fromAccountingMetadata(
+  source: UsageSource,
+  accounting: NonNullable<UsageMetadata['accounting']>,
+): CanonicalTokenUsage {
+  return {
+    source,
+    ...(accounting.input_tokens === undefined ? {} : { inputTokens: accounting.input_tokens }),
+    ...(accounting.output_tokens === undefined ? {} : { outputTokens: accounting.output_tokens }),
+    ...(accounting.cache_read_input_tokens === undefined
+      ? {}
+      : { cacheReadTokens: accounting.cache_read_input_tokens }),
+    ...(accounting.cache_creation_input_tokens === undefined
+      ? {}
+      : { cacheWriteTokens: accounting.cache_creation_input_tokens }),
+    ...(accounting.reasoning_tokens === undefined
+      ? {}
+      : { reasoningTokens: accounting.reasoning_tokens }),
+    ...(accounting.total_tokens === undefined ? {} : { totalTokens: accounting.total_tokens }),
+  };
+}
+
+/** A provider that has not moved to the accounting block: its standard usage and flat extras. */
+function legacyAccounting(
+  source: UsageSource,
+  usage: NonNullable<GatewayEvent['usage']>,
+  metadata: UsageMetadata | undefined,
+): CanonicalTokenUsage {
+  return {
+    source,
+    inputTokens: usage.input_tokens,
+    outputTokens: usage.output_tokens,
+    ...(usage.cache_read_input_tokens === undefined
+      ? {}
+      : { cacheReadTokens: usage.cache_read_input_tokens }),
+    ...(usage.cache_creation_input_tokens === undefined
+      ? {}
+      : { cacheWriteTokens: usage.cache_creation_input_tokens }),
+    ...(metadata?.reasoning_tokens === undefined
+      ? {}
+      : { reasoningTokens: metadata.reasoning_tokens }),
+    ...(metadata?.total_tokens === undefined ? {} : { totalTokens: metadata.total_tokens }),
+  };
+}
+
+/**
+ * What the response reported. An unavailable response reports nothing: the
+ * protocol's zeros for it are placeholders and never counted.
+ */
+function reported(event: InvocationEvent): CanonicalTokenUsage {
+  const metadata = event.usageMetadata;
+  const source = metadata?.source ?? 'unavailable';
+  if (source === 'unavailable' || !event.usage) {
+    return { source: 'unavailable' };
+  }
+  return metadata?.accounting
+    ? fromAccountingMetadata(source, metadata.accounting)
+    : legacyAccounting(source, event.usage, metadata);
+}
+
+/** What one response consumed: the harness's turn sums replace the reported counts when present. */
+function spend(event: InvocationEvent): CanonicalTokenUsage {
+  const usage = reported(event);
+  if (usage.source === 'unavailable') {
+    return usage;
+  }
   const metadata = event.usageMetadata;
   return {
-    input_tokens: metadata?.consumed_input_tokens ?? usage.input_tokens,
-    output_tokens: metadata?.consumed_output_tokens ?? usage.output_tokens,
-    cache_read_input_tokens: metadata?.consumed_cache_read_tokens ?? usage.cache_read_input_tokens,
-    cache_creation_input_tokens:
-      metadata?.consumed_cache_creation_tokens ?? usage.cache_creation_input_tokens,
-    reasoning_tokens: metadata?.reasoning_tokens,
-    total_tokens: metadata?.total_tokens,
-    model_calls: metadata?.model_calls,
+    ...usage,
+    ...(metadata?.consumed_input_tokens === undefined
+      ? {}
+      : { inputTokens: metadata.consumed_input_tokens }),
+    ...(metadata?.consumed_output_tokens === undefined
+      ? {}
+      : { outputTokens: metadata.consumed_output_tokens }),
+    ...(metadata?.consumed_cache_read_tokens === undefined
+      ? {}
+      : { cacheReadTokens: metadata.consumed_cache_read_tokens }),
+    ...(metadata?.consumed_cache_creation_tokens === undefined
+      ? {}
+      : { cacheWriteTokens: metadata.consumed_cache_creation_tokens }),
+    ...(metadata?.model_calls === undefined ? {} : { modelCalls: metadata.model_calls }),
   };
 }
 
-/** The live context one response reported, from its standard fields. */
+/** The live context one response reported: its own counts, never a harness turn's sums. */
 function contextOf(event: InvocationEvent): ContextUsage {
-  const usage = event.usage as Usage;
+  const usage = reported(event);
+  if (usage.source === 'unavailable') {
+    return { source: 'unavailable' };
+  }
+  const ratio = usage.source === 'provider' ? cacheReadRatio(usage) : undefined;
   return {
-    input_tokens: usage.input_tokens,
-    cache_read_input_tokens: usage.cache_read_input_tokens ?? 0,
-    cache_creation_input_tokens: usage.cache_creation_input_tokens ?? 0,
+    source: usage.source,
+    ...(usage.inputTokens === undefined ? {} : { input_tokens: usage.inputTokens }),
+    ...(usage.cacheReadTokens === undefined
+      ? {}
+      : { cache_read_input_tokens: usage.cacheReadTokens }),
+    ...(usage.cacheWriteTokens === undefined
+      ? {}
+      : { cache_creation_input_tokens: usage.cacheWriteTokens }),
+    ...(ratio === undefined ? {} : { cache_read_ratio: ratio }),
   };
 }
 
-function aggregate(snapshot: UsageSnapshot, event: InvocationEvent) {
+function aggregate(state: SnapshotState, event: InvocationEvent) {
   const usage = spend(event);
-  snapshot.contexts = { ...snapshot.contexts, [event.route]: contextOf(event) };
-  snapshot.requests++;
-  addUsage(snapshot.totals, usage);
-  addBreakdown(snapshot.byModel, event.model, usage);
-  addBreakdown(snapshot.byEffort, event.effort, usage);
-  addBreakdown(snapshot.byEndpoint, event.endpoint, usage);
-  const source = event.usageMetadata?.source ?? 'unavailable';
-  const entry = snapshot.entries.find(
+  state.contexts = { ...state.contexts, [event.route]: contextOf(event) };
+  state.requests++;
+  addCanonicalUsage(state.totals, usage);
+  addBreakdown(state.byModel, event.model, usage);
+  addBreakdown(state.byEffort, event.effort, usage);
+  addBreakdown(state.byEndpoint, event.endpoint, usage);
+  const source = usage.source;
+  const entry = state.entries.find(
     (item) =>
       item.provider === event.route &&
       item.model === event.model &&
@@ -228,11 +303,11 @@ function aggregate(snapshot: UsageSnapshot, event: InvocationEvent) {
   );
   if (entry) {
     entry.requests++;
-    addUsage(entry.usage, usage);
-  } else if (snapshot.entries.length < 256) {
-    const totals = emptyTotals();
-    addUsage(totals, usage);
-    snapshot.entries.push({
+    addCanonicalUsage(entry.usage, usage);
+  } else if (state.entries.length < 256) {
+    const totals = createUsageAccumulator();
+    addCanonicalUsage(totals, usage);
+    state.entries.push({
       provider: event.route,
       requests: 1,
       model: event.model,
@@ -242,18 +317,18 @@ function aggregate(snapshot: UsageSnapshot, event: InvocationEvent) {
       usage: totals,
     });
   } else {
-    snapshot.truncated = true;
+    state.truncated = true;
   }
 }
 
 /** One gateway owns this ledger; persisted lines never contain prompt or credential data. */
 export class ReceiptLedger {
   private readonly pending = new Map<string, PendingInvocation>();
-  private readonly sessions = new Map<string, UsageSnapshot>();
+  private readonly sessions = new Map<string, SnapshotState>();
   private readonly completed: WorkerUsageReceipt[] = [];
   private readonly completedKeys = new Set<string>();
   private readonly seenRequests = new Set<string>();
-  private readonly total = emptySnapshot();
+  private readonly total = emptyState();
   private readonly maxInvocations: number;
   private readonly maxRecent: number;
   private readonly writeLine: (line: string) => Promise<void>;
@@ -284,7 +359,7 @@ export class ReceiptLedger {
     }
     this.pending.set(keyFor(ref), {
       ref,
-      snapshot: emptySnapshot(),
+      state: emptyState(),
       startedAt: this.now().toISOString(),
     });
   }
@@ -304,7 +379,7 @@ export class ReceiptLedger {
     if (!pending) {
       return;
     }
-    aggregate(pending.snapshot, event);
+    aggregate(pending.state, event);
     pending.context = contextOf(event);
     aggregate(this.total, event);
     const session = event.session ?? '';
@@ -315,11 +390,11 @@ export class ReceiptLedger {
           this.sessions.delete(oldest);
         }
       }
-      this.sessions.set(session, emptySnapshot());
+      this.sessions.set(session, emptyState());
     }
-    const snapshot = this.sessions.get(session);
-    if (snapshot) {
-      aggregate(snapshot, event);
+    const state = this.sessions.get(session);
+    if (state) {
+      aggregate(state, event);
     }
   }
 
@@ -340,7 +415,7 @@ export class ReceiptLedger {
     if (ref.invocationId) {
       retain(this.completedKeys, dedup);
     }
-    const snapshot = copySnapshot(pending.snapshot);
+    const snapshot = serializeState(pending.state);
     const receipt: WorkerUsageReceipt = {
       schemaVersion: RECEIPT_SCHEMA_VERSION,
       id: randomUUID(),
@@ -381,8 +456,8 @@ export class ReceiptLedger {
   }
 
   snapshot(session?: string): UsageSnapshot {
-    return copySnapshot(
-      session === undefined ? this.total : (this.sessions.get(session) ?? emptySnapshot()),
+    return serializeState(
+      session === undefined ? this.total : (this.sessions.get(session) ?? emptyState()),
     );
   }
 

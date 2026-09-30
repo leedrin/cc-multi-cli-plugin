@@ -254,23 +254,26 @@ test('receipts charge consumption, not the context a harness turn reports', () =
   const receipt = ledger.complete({ session: 's', agentId: 'worker' }, 'completed');
   assert.ok(receipt);
   assert.deepEqual(receipt.usage, {
+    source: 'provider',
     input_tokens: 62745,
     output_tokens: 464,
     cache_read_input_tokens: 900,
-    cache_creation_input_tokens: 0,
     total_tokens: 63099,
     model_calls: 5,
+    cache_read_ratio: 900 / (62745 + 900),
   });
   assert.deepEqual(receipt.context, {
+    source: 'provider',
     input_tokens: 100,
     cache_read_input_tokens: 900,
-    cache_creation_input_tokens: 0,
+    cache_read_ratio: 0.9,
   });
   const session = ledger.snapshot('s');
   assert.deepEqual(session.contexts?.antigravity, {
+    source: 'provider',
     input_tokens: 12964,
     cache_read_input_tokens: 0,
-    cache_creation_input_tokens: 0,
+    cache_read_ratio: 0,
   });
   assert.equal(
     session.entries.find((entry) => entry.provider === 'antigravity')?.usage.input_tokens,
