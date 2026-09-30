@@ -17,6 +17,7 @@ import {
   safeguardResults,
 } from '../../multi-core/src/gateway/safeguards.ts';
 import { callId, toolName } from '../../multi-core/src/gateway/tools.ts';
+import { usageTrace } from '../../multi-core/src/gateway/usage-trace.ts';
 import {
   isOpenAIResponsesUsage,
   type OpenAIResponsesUsage,
@@ -584,6 +585,7 @@ class ResponseStream {
   private cursor = 0;
   private stopped: string | null = null;
   completed = false;
+  private terminal = 'response.completed';
   private model: string;
   private emit: Emit;
   private options: ResponseOptions;
@@ -653,6 +655,11 @@ class ResponseStream {
     const canonical = parseOpenAIResponseUsage(usage);
     message.usage = openAIProtocolUsage(canonical);
     message.multi_usage = responseUsageMetadata(canonical, this.model);
+    usageTrace({
+      provider: this.options.safeguardProvider ?? 'openai',
+      event: this.terminal,
+      usage: canonical,
+    });
     message.stop_reason = stopReason;
     message.stop_sequence = this.stopped;
     const safeguard_results = safeguardResults(
@@ -688,6 +695,7 @@ class ResponseStream {
     ) {
       throw new Error('Provider completed without token usage; cost accounting is unavailable');
     }
+    this.terminal = event.type;
     this.start(event.response);
     if (event.response.status && !['completed', 'incomplete'].includes(event.response.status)) {
       throw new Error(`OpenAI terminal response has status ${event.response.status}`);
