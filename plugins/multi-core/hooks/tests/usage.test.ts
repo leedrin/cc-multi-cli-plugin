@@ -7,7 +7,6 @@ test('usage command reads only the current session without model dispatch', asyn
   });
   on('session.id', () => ({ value: 'session/one' }));
   on('ui.open', () => ({ value: undefined }));
-  on('ui.invalidate', () => ({ value: undefined }));
   on('http.fetch', (_$, event) => {
     expect(event.url).toBe(
       'http://127.0.0.1:4000/multi/mod/usage?sessionId=session%2Fone&view=providers',
@@ -57,7 +56,9 @@ test('usage command reads only the current session without model dispatch', asyn
     requestId: 'multi-usage',
     props: { title: 'Multi usage', isFocused: true, bodyColumns: 80 },
   });
-  expect(JSON.stringify(rendered)).toContain('usage-view.ts');
+  // The hook draws the tree itself: Buttons, not a Client module.
+  expect(JSON.stringify(rendered)).not.toContain('usage-view.ts');
+  expect(JSON.stringify(rendered)).toContain('tab:all');
   expect(JSON.stringify(rendered)).toContain('OpenAI');
 });
 
@@ -139,7 +140,6 @@ test('receipts show a worker context beside what it consumed', async ($, on) => 
   });
   on('session.id', () => ({ value: 'session' }));
   on('ui.open', () => ({ value: undefined }));
-  on('ui.invalidate', () => ({ value: undefined }));
   on('http.fetch', (_$, event) => {
     const body = event.url.includes('/multi/mod/receipts')
       ? {
@@ -176,12 +176,11 @@ test('receipts show a worker context beside what it consumed', async ($, on) => 
     requestId: 'multi-usage',
     props: { title: 'Multi usage', isFocused: true, bodyColumns: 120 },
   });
-  await pane.resize({ columns: 120, rows: 20, in: 'usage' });
-  await pane.press({ key: 'receipts' });
-  expect((await pane.find({ type: 'Text', text: /^antigravity-gemini/, in: 'usage' }))?.text).toBe(
+  await pane.press({ key: 'tab:receipts' });
+  expect((await pane.find({ type: 'Text', text: /^antigravity-gemini/ }))?.text).toBe(
     'antigravity-gemini-3.8-flash · completed · 2026-09-22T12:00:00Z',
   );
-  expect((await pane.find({ type: 'Text', text: /context/, in: 'usage' }))?.text).toBe(
+  expect((await pane.find({ type: 'Text', text: /context/ }))?.text).toBe(
     '  1 requests · 19 model calls · context 20,480 · consumed 812,345 input · cached 0 · 4,096 output',
   );
   await pane.unmount();
@@ -194,7 +193,6 @@ test('a receipts load failure keeps the provider rows and says so', async ($, on
   });
   on('session.id', () => ({ value: 'session' }));
   on('ui.open', () => ({ value: undefined }));
-  on('ui.invalidate', () => ({ value: undefined }));
   on('http.fetch', (_$, event) => {
     if (event.url.includes('/multi/mod/receipts')) {
       return { value: { ok: false, status: 500, headers: {}, text: '{}' } };
@@ -215,13 +213,10 @@ test('a receipts load failure keeps the provider rows and says so', async ($, on
     requestId: 'multi-usage',
     props: { title: 'Multi usage', isFocused: true, bodyColumns: 120 },
   });
-  await pane.resize({ columns: 120, rows: 20, in: 'usage' });
-  await pane.press({ key: 'receipts' });
-  expect(
-    await pane.find({ type: 'Text', text: /Could not load receipts\./, in: 'usage' }),
-  ).toBeTruthy();
-  await pane.press({ key: 'all' });
-  expect(await pane.find({ type: 'Text', text: /quota 10%/, in: 'usage' })).toBeTruthy();
+  await pane.press({ key: 'tab:receipts' });
+  expect(await pane.find({ type: 'Text', text: /Could not load receipts\./ })).toBeTruthy();
+  await pane.press({ key: 'tab:all' });
+  expect(await pane.find({ type: 'Text', text: /quota 10%/ })).toBeTruthy();
   await pane.unmount();
 });
 
@@ -319,7 +314,6 @@ async function fallbackRun(
   on('session.id', () => ({ value: 'fallback' }));
   on('ui.open', open as never);
   on('ui.close', close as never);
-  on('ui.invalidate', () => ({ value: undefined }));
   on('http.fetch', () => ({
     value: { ok: true, status: 200, headers: {}, text: JSON.stringify(fiveProviders) },
   }));
@@ -369,7 +363,6 @@ async function mountedPane(
   });
   on('session.id', () => ({ value: 'buttons' }));
   on('ui.open', () => ({ value: { isPlaced: true } }));
-  on('ui.invalidate', () => ({ value: undefined }));
   on('ui.close', (_$, event) => {
     closed.push(event.id);
     return { value: undefined };
@@ -386,7 +379,6 @@ async function mountedPane(
     requestId: 'multi-usage',
     props: { title: 'Multi usage', isFocused: true, bodyColumns: 120 },
   });
-  await pane.resize({ columns: 120, rows: 24, in: 'usage' });
   return pane;
 }
 
@@ -394,8 +386,8 @@ test('the Refresh button reloads the provider view from the gateway with refresh
   const urls: string[] = [];
   const pane = await mountedPane($, on, urls, []);
   expect(urls).toHaveLength(1);
-  expect(await pane.find({ type: 'Button', text: 'Refresh', in: 'usage' })).toBeTruthy();
-  await pane.press({ key: 'refresh' });
+  expect(await pane.find({ type: 'Button', text: 'Refresh' })).toBeTruthy();
+  await pane.press({ key: 'action:refresh' });
   expect(urls).toHaveLength(2);
   expect(urls[1]).toContain('view=providers&refresh=true&sessionId=buttons');
   await pane.unmount();
@@ -404,8 +396,8 @@ test('the Refresh button reloads the provider view from the gateway with refresh
 test('the Close button closes the usage pane without a keyboard', async ($, on) => {
   const closed: string[] = [];
   const pane = await mountedPane($, on, [], closed);
-  expect(await pane.find({ type: 'Button', text: 'Close', in: 'usage' })).toBeTruthy();
-  await pane.press({ key: 'close' });
+  expect(await pane.find({ type: 'Button', text: 'Close' })).toBeTruthy();
+  await pane.press({ key: 'action:close' });
   expect(closed).toEqual(['multi-usage']);
   await pane.unmount();
 });

@@ -3,7 +3,7 @@ import { expect, mock, test } from 'claude-code/testing';
 
 // The Usage Pane reaches a person through four layers that fail independently: the gateway
 // data renders into a tree, the engine places the pane, the focus system lands focus on one of
-// its elements, and keys are delivered. This fixture observes each layer on its own so a host
+// its elements, and choosing a tab moves the pane to it. (The kit cannot raise a person's focus move, so ui.focus\n// itself is covered beside the other hooks in native-usage-menu.test.ts.) This fixture observes each layer on its own so a host
 // problem can be attributed to one of them. It characterizes the pane as it is, and what the command does when placement fails.
 
 interface Layers {
@@ -12,9 +12,9 @@ interface Layers {
   rendered: boolean;
   focusRequested: boolean;
   focusEvents: number;
-  keyDelivered: boolean;
+  navigated: boolean;
 }
-type Failure = 'none' | 'render' | 'placement' | 'focus' | 'key';
+type Failure = 'none' | 'render' | 'placement' | 'focus' | 'navigate';
 
 /** The first layer that did not hold, in the order a person meets them. */
 function classify(layers: Layers): Failure {
@@ -27,7 +27,7 @@ function classify(layers: Layers): Failure {
   if (!layers.focusRequested || layers.focusEvents === 0) {
     return 'focus';
   }
-  return layers.keyDelivered ? 'none' : 'key';
+  return layers.navigated ? 'none' : 'navigate';
 }
 
 const dashboard = {
@@ -43,7 +43,7 @@ const env = {
   MULTI_MOD_GATEWAY_URL: 'http://127.0.0.1:4000',
 };
 
-test('layers: a healthy host renders, places, focuses and delivers keys', async ($, on) => {
+test('layers: a healthy host renders, places, focuses and opens the chosen tab', async ($, on) => {
   mock.env(on, env);
   on('session.id', () => ({ value: 'layers-healthy' }));
   let opened: UiOpenResult | undefined;
@@ -51,7 +51,6 @@ test('layers: a healthy host renders, places, focuses and delivers keys', async 
     opened = { isPlaced: true };
     return { value: opened };
   });
-  on('ui.invalidate', () => ({ value: undefined }));
   const focused: string[] = [];
   on('ui.focus', (_$, event) => {
     focused.push(event.key);
@@ -69,17 +68,18 @@ test('layers: a healthy host renders, places, focuses and delivers keys', async 
     requestId: 'multi-usage',
     props: { title: 'Multi usage', isFocused: true, bodyColumns: 80 },
   });
-  const selected = await pane.find({ type: 'Button', text: '[All]', in: 'usage' });
-  await $.ui.focus({ requestId: 'multi-usage', key: String(selected?.key) });
-  await pane.key({ key: 'right', in: 'usage' });
-  const moved = await pane.find({ type: 'Button', text: '[OpenAI]', in: 'usage' });
+  const selected = await pane.find({ type: 'Button', text: '[All]' });
+  expect(selected?.key).toBe('tab:all');
+  await $.ui.focus({ requestId: 'multi-usage', key: 'tab:all' });
+  await pane.press({ key: 'provider:openai' });
+  const moved = await pane.find({ type: 'Button', text: '[OpenAI]' });
   const layers: Layers = {
     requested: opened !== undefined,
     placed: opened?.isPlaced === true,
-    rendered: (await pane.find({ type: 'Client', key: 'usage' })) !== undefined,
+    rendered: selected !== undefined,
     focusRequested: selected?.props.autoFocus === true,
     focusEvents: focused.length,
-    keyDelivered: moved !== undefined,
+    navigated: moved !== undefined,
   };
   expect(layers).toEqual({
     requested: true,
@@ -87,7 +87,7 @@ test('layers: a healthy host renders, places, focuses and delivers keys', async 
     rendered: true,
     focusRequested: true,
     focusEvents: 1,
-    keyDelivered: true,
+    navigated: true,
   });
   expect(classify(layers)).toBe('none');
   await pane.unmount();
@@ -104,7 +104,6 @@ test('layers: a refused placement falls back to text and closes the waiting pane
     closed.push(event.id);
     return { value: undefined };
   });
-  on('ui.invalidate', () => ({ value: undefined }));
   on('http.fetch', () => ({
     value: { ok: true, status: 200, headers: {}, text: JSON.stringify(dashboard) },
   }));
@@ -120,7 +119,7 @@ test('layers: a refused placement falls back to text and closes the waiting pane
       rendered: true,
       focusRequested: true,
       focusEvents: 0,
-      keyDelivered: false,
+      navigated: false,
     }),
   ).toBe('placement');
 });
@@ -143,7 +142,7 @@ test('layers: a session without gateway data never reaches a pane', async ($, on
       rendered: false,
       focusRequested: false,
       focusEvents: 0,
-      keyDelivered: false,
+      navigated: false,
     }),
   ).toBe('render');
 });
@@ -152,7 +151,6 @@ test('layers: a placed, rendered pane that receives no focus event is a focus fa
   mock.env(on, env);
   on('session.id', () => ({ value: 'layers-focus' }));
   on('ui.open', () => ({ value: { isPlaced: true } }));
-  on('ui.invalidate', () => ({ value: undefined }));
   const focused: string[] = [];
   on('ui.focus', (_$, event) => {
     focused.push(event.key);
@@ -169,15 +167,15 @@ test('layers: a placed, rendered pane that receives no focus event is a focus fa
     requestId: 'multi-usage',
     props: { title: 'Multi usage', isFocused: true, bodyColumns: 80 },
   });
-  const selected = await pane.find({ type: 'Button', text: '[All]', in: 'usage' });
+  const selected = await pane.find({ type: 'Button', text: '[All]' });
   const layers: Layers = {
     requested: true,
     placed: true,
-    rendered: (await pane.find({ type: 'Client', key: 'usage' })) !== undefined,
+    rendered: selected !== undefined,
     focusRequested: selected?.props.autoFocus === true,
     // The engine never raised `ui.focus`: the host did not give the pane focus.
     focusEvents: focused.length,
-    keyDelivered: false,
+    navigated: false,
   };
   expect(layers.rendered).toBe(true);
   expect(layers.focusRequested).toBe(true);
@@ -186,11 +184,10 @@ test('layers: a placed, rendered pane that receives no focus event is a focus fa
   await pane.unmount();
 });
 
-test('layers: focus that arrives but keys that never reach the Client is a key failure', async ($, on) => {
+test('layers: a control that is not a tab leaves the pane where it was', async ($, on) => {
   mock.env(on, env);
   on('session.id', () => ({ value: 'layers-key' }));
   on('ui.open', () => ({ value: { isPlaced: true } }));
-  on('ui.invalidate', () => ({ value: undefined }));
   let focusEvents = 0;
   on('ui.focus', () => {
     focusEvents++;
@@ -207,17 +204,18 @@ test('layers: focus that arrives but keys that never reach the Client is a key f
     requestId: 'multi-usage',
     props: { title: 'Multi usage', isFocused: true, bodyColumns: 80 },
   });
-  await $.ui.focus({ requestId: 'multi-usage', key: 'All' });
-  // The host delivered focus but no key: the tab selection is unchanged.
-  const stillAll = await pane.find({ type: 'Button', text: '[All]', in: 'usage' });
+  await $.ui.focus({ requestId: 'multi-usage', key: 'tab:all' });
+  // A press on a control that is not a tab leaves the selection where it was.
+  await pane.press({ key: 'action:quota-advice' });
+  const stillAll = await pane.find({ type: 'Button', text: '[All]' });
   const layers: Layers = {
     requested: true,
     placed: true,
     rendered: true,
     focusRequested: stillAll?.props.autoFocus === true,
     focusEvents,
-    keyDelivered: stillAll === undefined,
+    navigated: stillAll === undefined,
   };
-  expect(classify(layers)).toBe('key');
+  expect(classify(layers)).toBe('navigate');
   await pane.unmount();
 });

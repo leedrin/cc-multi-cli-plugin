@@ -5,7 +5,6 @@ import test from 'node:test';
 // in the offline TypeScript project. All runtime imports in these modules are erased types.
 const hooksUrl = new URL('../../plugins/multi-core/hooks/usage.ts', import.meta.url);
 const formatUrl = new URL('../../plugins/multi-core/hooks/usage-format.ts', import.meta.url);
-const viewUrl = new URL('../../plugins/multi-core/hooks/usage-view.ts', import.meta.url);
 const dashboard = {
   updatedAt: 'today',
   providers: [
@@ -19,113 +18,293 @@ const dashboard = {
   ],
 };
 
-test('usage client messages refresh props and receipts without losing providers or accepting foreign panes', async () => {
+type Element = { type: string; props: Record<string, unknown>; children?: Element[] };
+type PaneHook = (
+  host: unknown,
+  event: Record<string, unknown>,
+  next: (event: Record<string, unknown>) => Promise<Record<string, unknown>>,
+) => Promise<Record<string, unknown>>;
+
+const manyLines = {
+  updatedAt: 'today',
+  providers: [
+    {
+      id: 'cursor',
+      name: 'Cursor',
+      status: 'ready',
+      summary: '$0.00 charged',
+      details: ['native spend'],
+    },
+    {
+      id: 'openai',
+      name: 'OpenAI',
+      status: 'ready',
+      summary: 'quota ok',
+      details: Array.from({ length: 40 }, (_, index) => `detail ${index}`),
+    },
+  ],
+};
+
+function flatten(element: Element): Element[] {
+  const children = element.children ?? [];
+  return [element, ...(Array.isArray(children) ? children.flatMap((child) => flatten(child)) : [])];
+}
+
+/** The usage hooks over a fake engine that records every gateway read and pane call. */
+async function paneHarness(options: { receiptsFail?: boolean } = {}) {
   const requests: string[] = [];
+  const closed: string[] = [];
+  let session = 'session/one';
+  const factories = Object.fromEntries(
+    ['Box', 'Text', 'Button'].map((name) => [
+      name,
+      (props: Record<string, unknown>): Element => {
+        const { children, ...rest } = props;
+        return {
+          type: name,
+          props: rest,
+          children: Array.isArray(children)
+            ? (children as Element[])
+            : [{ type: 'Raw', props: { text: children } }],
+        };
+      },
+    ]),
+  );
   const engine = {
     env: {
       get: async (name: string) => (name === 'MULTI_GATEWAY_TOKEN' ? 'secret' : 'http://localhost'),
     },
-    session: { id: async () => 'session/one' },
+    session: { id: async () => session },
     http: {
       fetch: async (url: string) => {
         requests.push(url);
-        const result = url.includes('/receipts?')
-          ? {
-              receipts: [
-                {
-                  agentId: 'worker',
-                  outcome: 'completed',
-                  time: 'today',
-                  requests: 1,
-                  usage: { input_tokens: 2, output_tokens: 3 },
-                },
-              ],
-            }
-          : dashboard;
-        return { ok: true, text: JSON.stringify(result) };
+        if (url.includes('/receipts?')) {
+          return options.receiptsFail
+            ? { ok: false, text: '{}' }
+            : {
+                ok: true,
+                text: JSON.stringify({
+                  receipts: [
+                    {
+                      agentId: 'worker',
+                      outcome: 'completed',
+                      time: 'today',
+                      requests: 1,
+                      usage: { input_tokens: 2, output_tokens: 3 },
+                    },
+                  ],
+                }),
+              };
+        }
+        return { ok: true, text: JSON.stringify(manyLines) };
       },
     },
-    ui: { open: async () => {}, invalidate: () => {} },
+    ui: {
+      open: async () => {},
+      close: async (args: { id: string }) => {
+        closed.push(args.id);
+      },
+      invalidate: () => {},
+      resolve: async () => factories,
+    },
   };
-  type Result = { props?: { providers: unknown[]; receiptLines?: string[] }; text?: string };
-  type Hook = (
-    host: typeof engine,
-    event: Record<string, unknown>,
-    next: () => Promise<Result>,
-  ) => Promise<Result>;
-  const hooks = new Map<string, Hook>();
   const module = await import(hooksUrl.href);
-  module.register((name: string, _filter: unknown, hook: Hook) => hooks.set(name, hook));
-  const command = hooks.get('command.run');
-  const message = hooks.get('ui.message');
-  assert(command && message);
-  const next = async () => ({});
-  await command(engine, { args: '' }, next);
-  const event = {
-    requestId: 'multi-usage',
-    element: 'usage',
-    module: 'hooks/usage-view.ts',
-    data: { action: 'refresh' },
+  const hooks = new Map<string, PaneHook>();
+  module.register((name: string, filter: unknown, hook?: PaneHook) => {
+    hooks.set(name, typeof filter === 'function' ? (filter as PaneHook) : (hook as PaneHook));
+  });
+  const passed = { passed: true };
+  const next = async () => passed;
+  const call = (name: string, event: Record<string, unknown>) => {
+    const hook = hooks.get(name);
+    assert(hook, name);
+    return hook(engine, event, next);
   };
-  const refreshed = await message(engine, event, next);
-  assert.deepEqual(refreshed.props?.providers, dashboard.providers);
-  assert(requests[1].includes('refresh=true&sessionId=session%2Fone'));
-  const receipts = await message(engine, { ...event, data: { action: 'receipts' } }, next);
-  assert.deepEqual(receipts.props?.providers, dashboard.providers);
-  assert.match(receipts.props?.receiptLines?.[0] ?? '', /worker/);
-  await message(engine, { ...event, requestId: 'another-pane' }, next);
-  assert.equal(requests.length, 3);
-});
-
-type Element = { type: string; props: Record<string, unknown> };
-function flatten(element: Element): Element[] {
-  const children = element.props.children;
-  return [element, ...(Array.isArray(children) ? children.flatMap((child) => flatten(child)) : [])];
+  const pane = { requestId: 'multi-usage', component: 'Pane' };
+  return {
+    requests,
+    closed,
+    passed,
+    setSession: (value: string) => {
+      session = value;
+    },
+    open: () => call('command.run', { args: '' }),
+    focus: (element: string | undefined) =>
+      call('ui.focus', { ...pane, ...(element ? { element } : {}), origin: 'keyboard' }),
+    press: (element: string) => call('ui.press', { ...pane, element, surface: 'terminal' }),
+    scroll: (by: number, bodyRows = 12) =>
+      call('ui.scroll', { ...pane, by, bodyRows, offset: 0, contentRows: 99, origin: 'keyboard' }),
+    close: () => call('ui.close', { id: 'multi-usage' }),
+    draw: async (extra: Record<string, unknown> = {}) => {
+      const tree = await call('ui.render', {
+        ...pane,
+        surface: 'terminal',
+        props: { bodyColumns: 80, scroll: { offset: 0, bodyRows: 12 } },
+        ...extra,
+      });
+      return tree === passed ? undefined : flatten(tree as unknown as Element);
+    },
+  };
 }
 
-test('usage Client supports provider navigation, receipts and refresh without model calls', async () => {
-  const posts: unknown[] = [];
-  let state: { selected: string; offset: number } | undefined;
-  let keyHandler: ((event: { key: string }) => void) | undefined;
-  const surface = {
-    elements: Object.fromEntries(
-      ['Box', 'Text', 'Button'].map((name) => [
-        name,
-        (props: Record<string, unknown>) => ({ type: name, props }),
-      ]),
-    ),
-    get state() {
-      return state;
-    },
-    rows: 20,
-    columns: 90,
-    setState: (value: { selected: string; offset: number }) => {
-      state = value;
-    },
-    onKey: (handler: (event: { key: string }) => void) => {
-      keyHandler = handler;
-    },
-    post: (data: unknown) => posts.push(data),
-  };
-  const { default: view } = await import(viewUrl.href);
-  const tree: Element = view(dashboard, surface);
-  const receipts = flatten(tree).find((item) => item.props.key === 'receipts');
-  assert(receipts);
-  (receipts.props.onPress as () => void)();
-  assert.equal(state?.selected, 'receipts');
-  assert.deepEqual(posts, [{ action: 'receipts' }]);
-  const receiptTree = view({ ...dashboard, receiptLines: ['worker complete'] }, surface);
-  assert(JSON.stringify(receiptTree).includes('worker complete'));
-  keyHandler?.({ key: 'r' });
-  assert.deepEqual(posts.at(-1), { action: 'receipts' });
-  keyHandler?.({ key: 'left' });
-  assert.equal(state?.selected, 'cursor');
-  const providerTree = view(dashboard, surface);
-  assert(JSON.stringify(providerTree).includes('native spend'));
-  keyHandler?.({ key: 'r' });
-  assert.deepEqual(posts.at(-1), { action: 'refresh' });
+const textOf = (element: Element) =>
+  (element.children ?? []).map((child) => String(child.props.text ?? '')).join('');
+const buttons = (tree: Element[] | undefined) =>
+  (tree ?? []).filter((item) => item.type === 'Button');
+const footer = (tree: Element[] | undefined) =>
+  (tree ?? []).map(textOf).find((text) => / of \d+ · /.test(text));
+
+test('the pane is drawn from hook state: Buttons, and only the selected tab asks for focus', async () => {
+  const harness = await paneHarness();
+  await harness.open();
+  const tree = await harness.draw();
+  const keys = buttons(tree).map((button) => button.props.key);
+  assert.deepEqual(keys, [
+    'tab:all',
+    'provider:cursor',
+    'provider:openai',
+    'tab:receipts',
+    'action:quota-advice',
+    'action:page-up',
+    'action:page-down',
+    'action:refresh',
+    'action:close',
+  ]);
+  const focusAsked = buttons(tree).filter((button) => button.props.autoFocus === true);
+  assert.deepEqual(
+    focusAsked.map((button) => button.props.key),
+    ['tab:all'],
+  );
+  assert(
+    !buttons(tree).some((button) => 'autoFocus' in button.props && button.props.autoFocus !== true),
+  );
+  assert(!JSON.stringify(tree).includes('Client'));
 });
 
+test('focus on a tab selects it and resets the scroll; focus elsewhere changes nothing', async () => {
+  const harness = await paneHarness();
+  await harness.open();
+  await harness.focus('provider:openai');
+  assert.equal(footer(await harness.draw()), '1–4 of 42 · Tab moves between controls');
+  await harness.scroll(10);
+  assert.equal(footer(await harness.draw()), '11–14 of 42 · Tab moves between controls');
+  await harness.focus('provider:cursor');
+  const cursor = await harness.draw();
+  assert(
+    buttons(cursor).some(
+      (button) => button.props.key === 'provider:cursor' && button.props.autoFocus === true,
+    ),
+  );
+  assert.match(footer(cursor) ?? '', /^1–/);
+  // The engine's own stops, a control that is not a tab, and a refused move leave the page alone.
+  await harness.focus(undefined);
+  await harness.focus('action:refresh');
+  assert(
+    buttons(await harness.draw()).some(
+      (button) => button.props.key === 'provider:cursor' && button.props.autoFocus === true,
+    ),
+  );
+  assert.equal(harness.requests.length, 1);
+});
+
+test('scrolling stays within the page', async () => {
+  const harness = await paneHarness();
+  await harness.open();
+  await harness.focus('provider:openai');
+  await harness.scroll(1000);
+  assert.equal(footer(await harness.draw()), '39–42 of 42 · Tab moves between controls');
+  await harness.scroll(-1000);
+  assert.match(footer(await harness.draw()) ?? '', /^1–4 of 42/);
+  await harness.press('action:page-down');
+  assert.match(footer(await harness.draw()) ?? '', /^4–7 of 42/);
+  await harness.press('action:page-up');
+  assert.match(footer(await harness.draw()) ?? '', /^1–4 of 42/);
+});
+
+test('receipts load once on first selection; Refresh reloads the page that is shown', async () => {
+  const harness = await paneHarness();
+  await harness.open();
+  assert.equal(harness.requests.length, 1);
+  await harness.focus('tab:receipts');
+  assert.equal(harness.requests.length, 2);
+  assert(harness.requests[1].includes('/multi/mod/receipts?sessionId=session%2Fone'));
+  assert((await harness.draw())?.map(textOf).some((text) => text.startsWith('worker · completed')));
+  await harness.focus('tab:all');
+  await harness.focus('tab:receipts');
+  assert.equal(harness.requests.length, 2);
+  await harness.press('action:refresh');
+  assert(harness.requests[2].includes('/multi/mod/receipts?'));
+  await harness.press('tab:all');
+  await harness.press('action:refresh');
+  assert(harness.requests[3].includes('view=providers&refresh=true&sessionId=session%2Fone'));
+  assert.equal(harness.requests.length, 4);
+});
+
+test('a receipts failure says so, keeps the providers, and is tried again on the next selection', async () => {
+  const harness = await paneHarness({ receiptsFail: true });
+  await harness.open();
+  await harness.focus('tab:receipts');
+  const failed = await harness.draw();
+  assert(failed?.map(textOf).includes('Could not load receipts.'));
+  await harness.focus('tab:all');
+  assert(buttons(await harness.draw()).some((button) => button.props.key === 'provider:openai'));
+  await harness.focus('tab:receipts');
+  assert.equal(harness.requests.filter((url) => url.includes('/receipts?')).length, 2);
+});
+
+test('the pane ignores another pane, another surface and elements that are not its own', async () => {
+  const harness = await paneHarness();
+  await harness.open();
+  assert.equal(await harness.draw({ requestId: 'another-pane' }), undefined);
+  assert.equal(await harness.draw({ surface: 'sdk' }), undefined);
+  await harness.press('provider:unknown');
+  await harness.press('someone-elses-button');
+  assert.equal(harness.requests.length, 1);
+  assert.equal(harness.closed.length, 0);
+  assert(
+    buttons(await harness.draw()).some(
+      (button) => button.props.key === 'tab:all' && button.props.autoFocus === true,
+    ),
+  );
+});
+
+test('Close closes the pane and forgets its state; a host close does too', async () => {
+  const harness = await paneHarness();
+  await harness.open();
+  await harness.press('action:close');
+  assert.deepEqual(harness.closed, ['multi-usage']);
+  assert.equal(await harness.draw(), undefined);
+  await harness.open();
+  assert((await harness.draw()) !== undefined);
+  await harness.close();
+  assert.equal(await harness.draw(), undefined);
+});
+
+test('pane state is kept per session, capped, and dropped when the session goes', async () => {
+  const harness = await paneHarness();
+  const module = await import(hooksUrl.href);
+  harness.setSession('first');
+  await harness.open();
+  await harness.focus('provider:openai');
+  harness.setSession('second');
+  await harness.open();
+  harness.setSession('first');
+  assert(
+    buttons(await harness.draw()).some(
+      (button) => button.props.key === 'provider:openai' && button.props.autoFocus === true,
+    ),
+  );
+  module.forgetUsageSession('first');
+  assert.equal(await harness.draw(), undefined);
+  for (let index = 0; index < 17; index++) {
+    harness.setSession(`many-${index}`);
+    await harness.open();
+  }
+  harness.setSession('many-0');
+  assert.equal(await harness.draw(), undefined);
+  harness.setSession('many-16');
+  assert((await harness.draw()) !== undefined);
+});
 test('quota advice is opt-in, session scoped, advisory and removed on detach', async () => {
   const module = await import(hooksUrl.href);
   let session = 'advice-one';
@@ -155,8 +334,8 @@ test('quota advice is opt-in, session scoped, advisory and removed on detach', a
   });
   const submit = hooks.get('classic.PreToolUse');
   const command = hooks.get('command.run');
-  const message = hooks.get('ui.message');
-  assert(submit && command && message);
+  const press = hooks.get('ui.press');
+  assert(submit && command && press);
   const next = async (event: Record<string, unknown>) => ({
     ...event,
     additionalContext: ['existing context'],
@@ -174,11 +353,11 @@ test('quota advice is opt-in, session scoped, advisory and removed on detach', a
   await command(engine, { args: '' }, next);
   const toggle = {
     requestId: 'multi-usage',
-    element: 'usage',
-    data: { action: 'toggle-quota-advice' },
+    component: 'Pane',
+    surface: 'terminal',
+    element: 'action:quota-advice',
   };
-  const enabled = await message(engine, toggle, next);
-  assert.equal((enabled.props as { quotaAdviceEnabled: boolean }).quotaAdviceEnabled, true);
+  await press(engine, toggle, next);
   const readsBeforeSpawn = reads;
   const informed = await submit(engine, prompt, async (event) => {
     assert.equal(reads, readsBeforeSpawn + 1);
@@ -215,11 +394,11 @@ test('quota advice is opt-in, session scoped, advisory and removed on detach', a
     ((await submit(engine, prompt, next)).additionalContext as string[])[1],
     /could not be retrieved/,
   );
-  await message(engine, toggle, next);
+  await press(engine, toggle, next);
   const beforeDisabled = reads;
   assert.deepEqual(await submit(engine, prompt, next), await next(prompt));
   assert.equal(reads, beforeDisabled);
-  await message(engine, toggle, next);
+  await press(engine, toggle, next);
   module.forgetUsageSession(session);
   assert.deepEqual(await submit(engine, prompt, next), await next(prompt));
   assert.equal(reads, beforeDisabled);

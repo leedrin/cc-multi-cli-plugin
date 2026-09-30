@@ -3,12 +3,21 @@ import { quotaAdvice } from './quota-advice.ts';
 import {
   formatReceipts,
   parseDashboard,
-  record,
   renderUsageText,
   type UsagePaneProps,
 } from './usage-format.ts';
+import {
+  MAX_PANES,
+  newPaneState,
+  PANE_ID,
+  pageLines,
+  renderPane,
+  scrollPane,
+  selectionOf,
+  type UsagePaneState,
+} from './usage-pane.ts';
 
-const panes = new Map<string, UsagePaneProps>();
+const panes = new Map<string, UsagePaneState>();
 const advisorySessions = new Set<string>();
 
 export function forgetUsageSession(session: string) {
@@ -64,10 +73,13 @@ export const register = (
     if (textOnly) {
       return { text: renderUsageText(response) };
     }
-    if (panes.size >= 16) {
+    if (panes.size >= MAX_PANES) {
       panes.clear();
     }
-    panes.set(session, { ...response, quotaAdviceEnabled: advisorySessions.has(session) });
+    panes.set(
+      session,
+      newPaneState({ ...response, quotaAdviceEnabled: advisorySessions.has(session) }),
+    );
     const fallback = await openPane($, session, response);
     if (fallback !== undefined) {
       return { text: fallback };
@@ -76,67 +88,140 @@ export const register = (
     return {};
   });
   on('ui.render', { component: 'Pane' }, async ($, event, next) => {
-    if (event.requestId !== 'multi-usage' || event.surface !== 'terminal') {
+    if (event.requestId !== PANE_ID || event.surface !== 'terminal') {
       return next(event);
     }
-    const props = panes.get(await $.session.id());
-    if (!props) {
+    const state = panes.get(await $.session.id());
+    if (!state) {
       return next(event);
     }
-    const { Client } = $.ui.resolve(event);
-    return Client({ key: 'usage', module: './usage-view.ts', props, width: '100%', flexGrow: 1 });
+    const elements = await $.ui.resolve(event);
+    state.columns = event.props.bodyColumns;
+    state.rows = event.props.scroll?.bodyRows ?? state.rows;
+    return renderPane(elements, state);
   });
-  on('ui.message', { element: 'usage' }, async ($, event, next) => {
-    if (event.requestId !== 'multi-usage' || event.element !== 'usage' || !record(event.data)) {
-      return next(event);
-    }
-    const action = event.data.action;
-    if (!['refresh', 'receipts', 'toggle-quota-advice', 'close'].includes(String(action))) {
-      return next(event);
-    }
+  // The focus ring walks the tabs: where it lands is the provider shown.
+  on('ui.focus', { component: 'Pane', requestId: PANE_ID }, async ($, event, next) => {
+    const result = await next(event);
     const session = await $.session.id();
-    const previous = panes.get(session);
-    if (!previous) {
-      return next(event);
+    const state = panes.get(session);
+    const selection = state ? selectionOf(event.element, state.props) : undefined;
+    if (state && selection !== undefined && selection !== state.selected && !result?.deny) {
+      await selectTab($, session, state, selection);
     }
-    return { props: await paneAction($, session, previous, String(action)) };
+    return result;
+  });
+  on('ui.press', { component: 'Pane', requestId: PANE_ID }, async ($, event, next) => {
+    const session = await $.session.id();
+    const state = panes.get(session);
+    if (state) {
+      await paneAction($, session, state, event.element);
+    }
+    return next(event);
+  });
+  on('ui.scroll', { component: 'Pane', requestId: PANE_ID }, async ($, event, next) => {
+    const state = panes.get(await $.session.id());
+    if (state) {
+      state.rows = event.bodyRows;
+      state.offset = scrollPane(state, event.by);
+      $.ui.invalidate('ui.render');
+    }
+    return next(event);
+  });
+  on('ui.close', { id: PANE_ID }, async ($, event, next) => {
+    panes.delete(await $.session.id());
+    return next(event);
   });
 };
 
-/** Applies one pane action for a session and returns the props the pane shows next. */
+const receiptsRoute = (session: string) =>
+  `/multi/mod/receipts?sessionId=${encodeURIComponent(session)}`;
+const refreshRoute = (session: string) =>
+  `/multi/mod/usage?view=providers&refresh=true&sessionId=${encodeURIComponent(session)}`;
+
+/** Shows one tab; the receipts load the first time they are shown, and only then. */
+async function selectTab(
+  $: EngineInterface,
+  session: string,
+  state: UsagePaneState,
+  selected: string,
+) {
+  state.selected = selected;
+  state.offset = 0;
+  if (selected === 'receipts' && !state.receiptLoaded && !state.loading) {
+    await loadReceipts($, session, state);
+  }
+  $.ui.invalidate('ui.render');
+}
+
+async function loadReceipts($: EngineInterface, session: string, state: UsagePaneState) {
+  state.loading = true;
+  $.ui.invalidate('ui.render');
+  try {
+    state.props = updatePane(state.props, 'receipts', await request($, receiptsRoute(session)));
+    // A failed load keeps the earlier data and is tried again the next time the tab is shown.
+    state.receiptLoaded = state.props.error === undefined;
+  } finally {
+    state.loading = false;
+  }
+}
+
+/** Refresh reloads what the page shows: the receipts, or the provider view from the gateway. */
+async function refreshPane($: EngineInterface, session: string, state: UsagePaneState) {
+  const receipts = state.selected === 'receipts';
+  state.loading = true;
+  try {
+    const response = await request($, receipts ? receiptsRoute(session) : refreshRoute(session));
+    state.props = updatePane(state.props, receipts ? 'receipts' : 'refresh', response);
+    if (receipts) {
+      state.receiptLoaded = state.props.error === undefined;
+    }
+  } finally {
+    state.loading = false;
+  }
+}
+
+async function closePane($: EngineInterface, session: string) {
+  panes.delete(session);
+  try {
+    await $.ui.close({ id: PANE_ID });
+  } catch {
+    // A pane that is already gone needs no closing.
+  }
+}
+
+/** Applies one pressed element of the pane; an element that is not one of ours is left alone. */
 async function paneAction(
   $: EngineInterface,
   session: string,
-  previous: UsagePaneProps,
-  action: string,
-): Promise<UsagePaneProps> {
-  if (action === 'close') {
-    panes.delete(session);
-    try {
-      await $.ui.close({ id: 'multi-usage' });
-    } catch {
-      // A pane that is already gone needs no closing.
-    }
-    return previous;
+  state: UsagePaneState,
+  element: string,
+) {
+  const selection = selectionOf(element, state.props);
+  if (selection !== undefined) {
+    await selectTab($, session, state, selection);
+    return;
   }
-  if (action === 'toggle-quota-advice') {
+  if (element === 'action:close') {
+    await closePane($, session);
+    return;
+  }
+  if (element === 'action:refresh') {
+    await refreshPane($, session, state);
+  } else if (element === 'action:quota-advice') {
     const enabled = !advisorySessions.has(session);
     if (enabled) {
       advisorySessions.add(session);
     } else {
       advisorySessions.delete(session);
     }
-    const props = { ...previous, quotaAdviceEnabled: enabled };
-    panes.set(session, props);
-    return props;
+    state.props = { ...state.props, quotaAdviceEnabled: enabled };
+  } else if (element === 'action:page-up' || element === 'action:page-down') {
+    state.offset = scrollPane(state, (element === 'action:page-up' ? -1 : 1) * pageLines(state));
+  } else {
+    return;
   }
-  const route =
-    action === 'refresh'
-      ? `/multi/mod/usage?view=providers&refresh=true&sessionId=${encodeURIComponent(session)}`
-      : `/multi/mod/receipts?sessionId=${encodeURIComponent(session)}`;
-  const props = updatePane(previous, action, await request($, route));
-  panes.set(session, props);
-  return props;
+  $.ui.invalidate('ui.render');
 }
 /**
  * Opens the pane. A host may place no pane, or throw; the same data is always readable as
