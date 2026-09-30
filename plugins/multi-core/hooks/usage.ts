@@ -1,4 +1,4 @@
-import type { EngineInterface, Register } from 'claude-code';
+import type { EngineInterface, Register, UiOpenResult } from 'claude-code';
 import { quotaAdvice } from './quota-advice.ts';
 import {
   formatReceipts,
@@ -68,23 +68,12 @@ export const register = (
       panes.clear();
     }
     panes.set(session, { ...response, quotaAdviceEnabled: advisorySessions.has(session) });
-    try {
-      await $.ui.open({
-        id: 'multi-usage',
-        title: 'Multi usage',
-        focus: true,
-        closeOnEscape: true,
-        rows: 20,
-      });
-      $.ui.invalidate('ui.render');
-      return {};
-    } catch {
-      return {
-        text: response.providers
-          .map((provider) => `${provider.name}: ${provider.summary}`)
-          .join('\n'),
-      };
+    const fallback = await openPane($, session, response);
+    if (fallback !== undefined) {
+      return { text: fallback };
     }
+    $.ui.invalidate('ui.render');
+    return {};
   });
   on('ui.render', { component: 'Pane' }, async ($, event, next) => {
     if (event.requestId !== 'multi-usage' || event.surface !== 'terminal') {
@@ -132,6 +121,40 @@ export const register = (
   });
 };
 
+/**
+ * Opens the pane. A host may place no pane, or throw; the same data is always readable as
+ * text, which is returned instead. An older build returns nothing from `open`, which
+ * counts as placed.
+ */
+async function openPane(
+  $: EngineInterface,
+  session: string,
+  response: UsagePaneProps,
+): Promise<string | undefined> {
+  let opened: UiOpenResult | undefined;
+  try {
+    opened = await $.ui.open({
+      id: 'multi-usage',
+      title: 'Multi usage',
+      focus: true,
+      closeOnEscape: true,
+      rows: 20,
+    });
+  } catch {
+    panes.delete(session);
+    return renderUsageText(response);
+  }
+  if (opened?.isPlaced !== false) {
+    return undefined;
+  }
+  panes.delete(session);
+  try {
+    await $.ui.close({ id: 'multi-usage' });
+  } catch {
+    // The pane only waited undrawn; failing to close it loses nothing.
+  }
+  return `The usage pane could not be shown (${opened.reason}). Showing text instead.\n\n${renderUsageText(response)}`;
+}
 /** Props are plain data: a field without a value is left out, never set to undefined. */
 function updatePane(previous: UsagePaneProps, action: string, response: unknown): UsagePaneProps {
   const { error: _error, ...kept } = previous;

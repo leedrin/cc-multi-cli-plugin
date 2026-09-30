@@ -304,3 +304,14 @@ test('renderUsageText needs only the dashboard data', async () => {
     ].join('\n'),
   );
 });
+
+test('the usage views carry no host-specific branches or focus timers', async () => {
+  const { readdir, readFile } = await import('node:fs/promises');
+  const dir = new URL('../../plugins/multi-core/hooks/', import.meta.url);
+  for (const name of (await readdir(dir)).filter((file) => /^usage.*\.ts$/.test(file))) {
+    const source = await readFile(new URL(name, dir), 'utf8');
+    assert.doesNotMatch(source, /orca|TERM_PROGRAM/i, name);
+    // The only timer is the request timeout; none may decide that focus failed.
+    assert.doesNotMatch(source, /setInterval|no key|focus.?timeout/i, name);
+  }
+});

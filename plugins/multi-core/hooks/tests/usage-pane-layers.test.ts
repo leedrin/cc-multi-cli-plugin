@@ -4,7 +4,7 @@ import { expect, mock, test } from 'claude-code/testing';
 // The Usage Pane reaches a person through four layers that fail independently: the gateway
 // data renders into a tree, the engine places the pane, the focus system lands focus on one of
 // its elements, and keys are delivered. This fixture observes each layer on its own so a host
-// problem can be attributed to one of them. It characterizes the Client-based pane as it is.
+// problem can be attributed to one of them. It characterizes the pane as it is, and what the command does when placement fails.
 
 interface Layers {
   requested: boolean;
@@ -93,20 +93,26 @@ test('layers: a healthy host renders, places, focuses and delivers keys', async 
   await pane.unmount();
 });
 
-test('layers: a refused placement leaves the command silent today', async ($, on) => {
+test('layers: a refused placement falls back to text and closes the waiting pane', async ($, on) => {
   mock.env(on, env);
   on('session.id', () => ({ value: 'layers-placement' }));
   on('ui.open', () => ({
     value: { isPlaced: false, reason: 'terminal is narrower than 144 columns' },
   }));
+  const closed: string[] = [];
+  on('ui.close', (_$, event) => {
+    closed.push(event.id);
+    return { value: undefined };
+  });
   on('ui.invalidate', () => ({ value: undefined }));
   on('http.fetch', () => ({
     value: { ok: true, status: 200, headers: {}, text: JSON.stringify(dashboard) },
   }));
   const result = await $.command.run({ command: 'multi-usage', args: '' });
-  // Characterization of the gap the text fallback closes: the placement result is ignored,
-  // so the person gets neither a pane nor any text.
-  expect(result).toEqual({});
+  expect(result.text).toContain('terminal is narrower than 144 columns');
+  expect(result.text).toContain('OpenAI [ready]');
+  expect(result.text).toContain('Cursor [ready]');
+  expect(closed).toEqual(['multi-usage']);
   expect(
     classify({
       requested: true,
@@ -118,7 +124,6 @@ test('layers: a refused placement leaves the command silent today', async ($, on
     }),
   ).toBe('placement');
 });
-
 test('layers: a session without gateway data never reaches a pane', async ($, on) => {
   mock.env(on, env);
   on('session.id', () => ({ value: 'layers-render' }));

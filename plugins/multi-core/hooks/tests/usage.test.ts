@@ -305,3 +305,54 @@ test('any other argument is refused before the gateway is asked', async ($, on) 
   expect(calls.fetch).toBe(0);
   expect(calls.open).toBe(0);
 });
+
+async function fallbackRun(
+  $: Parameters<Parameters<typeof test>[1]>[0],
+  on: Parameters<Parameters<typeof test>[1]>[1],
+  open: () => { value: { isPlaced: boolean; reason?: string } | undefined } | never,
+  close: () => { value: undefined } | never = () => ({ value: undefined }),
+) {
+  mock.env(on, {
+    MULTI_GATEWAY_TOKEN: 'secret',
+    MULTI_MOD_GATEWAY_URL: 'http://127.0.0.1:4000',
+  });
+  on('session.id', () => ({ value: 'fallback' }));
+  on('ui.open', open as never);
+  on('ui.close', close as never);
+  on('ui.invalidate', () => ({ value: undefined }));
+  on('http.fetch', () => ({
+    value: { ok: true, status: 200, headers: {}, text: JSON.stringify(fiveProviders) },
+  }));
+  return $.command.run({ command: 'multi-usage', args: '' });
+}
+
+test('an open that throws falls back to the full text', async ($, on) => {
+  const result = await fallbackRun($, on, () => {
+    throw new Error('no surface');
+  });
+  expect(result.text).toContain('Grok Build [error]');
+  expect(result.text).toContain('prompt cache read ratio 80.0%');
+});
+
+test('a refusal is still text when closing the waiting pane fails', async ($, on) => {
+  const result = await fallbackRun(
+    $,
+    on,
+    () => ({ value: { isPlaced: false, reason: 'no panes here' } }),
+    () => {
+      throw new Error('already gone');
+    },
+  );
+  expect(result.text).toContain('no panes here');
+  expect(result.text).toContain('OpenCode Zen [unavailable]');
+});
+
+test('an open that returns nothing counts as placed and shows the pane', async ($, on) => {
+  const result = await fallbackRun($, on, () => ({ value: undefined }));
+  expect(result.text).toBeUndefined();
+});
+
+test('a placed pane is the normal path', async ($, on) => {
+  const result = await fallbackRun($, on, () => ({ value: { isPlaced: true } }));
+  expect(result.text).toBeUndefined();
+});
