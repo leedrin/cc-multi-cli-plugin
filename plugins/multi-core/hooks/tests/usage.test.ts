@@ -186,3 +186,41 @@ test('receipts show a worker context beside what it consumed', async ($, on) => 
   );
   await pane.unmount();
 });
+
+test('a receipts load failure keeps the provider rows and says so', async ($, on) => {
+  mock.env(on, {
+    MULTI_GATEWAY_TOKEN: 'secret',
+    MULTI_MOD_GATEWAY_URL: 'http://127.0.0.1:4000',
+  });
+  on('session.id', () => ({ value: 'session' }));
+  on('ui.open', () => ({ value: undefined }));
+  on('ui.invalidate', () => ({ value: undefined }));
+  on('http.fetch', (_$, event) => {
+    if (event.url.includes('/multi/mod/receipts')) {
+      return { value: { ok: false, status: 500, headers: {}, text: '{}' } };
+    }
+    const body = {
+      updatedAt: '2026-09-22T12:00:00Z',
+      providers: [
+        { id: 'openai', name: 'OpenAI', status: 'ready', summary: 'quota 10%', details: [] },
+      ],
+    };
+    return { value: { ok: true, status: 200, headers: {}, text: JSON.stringify(body) } };
+  });
+  await $.command.run({ command: 'multi-usage', args: '' });
+  const pane = await $.ui.mount({
+    plugin: 'multi-core',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'multi-usage',
+    props: { title: 'Multi usage', isFocused: true, bodyColumns: 120 },
+  });
+  await pane.resize({ columns: 120, rows: 20, in: 'usage' });
+  await pane.press({ key: 'receipts' });
+  expect(
+    await pane.find({ type: 'Text', text: /Could not load receipts\./, in: 'usage' }),
+  ).toBeTruthy();
+  await pane.press({ key: 'all' });
+  expect(await pane.find({ type: 'Text', text: /quota 10%/, in: 'usage' })).toBeTruthy();
+  await pane.unmount();
+});

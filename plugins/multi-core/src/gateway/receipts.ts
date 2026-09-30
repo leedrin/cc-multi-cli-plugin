@@ -40,7 +40,7 @@ type UsageTotals = UsageTotalsV2;
  * The live context the last response reported: its input side, as Claude Code
  * reads it. An unavailable response is `{ source: 'unavailable' }`, never zeros.
  */
-interface ContextUsage {
+export interface ContextUsage {
   source: UsageSource;
   input_tokens?: number;
   cache_read_input_tokens?: number;

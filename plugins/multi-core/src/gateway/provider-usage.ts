@@ -1,4 +1,13 @@
-import type { UsageSnapshot } from './receipts.ts';
+import type { ContextUsage, UsageSnapshot } from './receipts.ts';
+import {
+  addCanonicalUsage,
+  type CanonicalTokenUsage,
+  cacheReadRatio,
+  createUsageAccumulator,
+  serializeUsageTotals,
+  type UsageSource,
+  type UsageTotalsV2,
+} from './usage-accounting.ts';
 
 type UsageProvider = 'openai' | 'cursor' | 'zen' | 'antigravity' | 'grok';
 interface ProviderUsageRow {
@@ -8,6 +17,8 @@ interface ProviderUsageRow {
   summary: string;
   details: string[];
   url?: string;
+  /** This session's usage for the provider, absent before its first request. */
+  session?: ProviderSessionUsage;
 }
 export interface ProviderUsageView {
   updatedAt: string;
@@ -51,34 +62,155 @@ const unavailable: Record<UsageProvider, string[]> = {
   ],
 };
 
-// Interim: unknown counts read as 0 here until the dashboard reads session usage with source.
-function sessionLines(snapshot: UsageSnapshot, provider: UsageProvider): string[] {
+/** What a provider's requests in one session reported, structured so a UI never parses text. */
+interface ProviderSessionUsage {
+  requests: number;
+  /** The model calls a harness made, when it identified them. */
+  modelCalls?: number;
+  source: UsageSource;
+  /** The last response's live context. */
+  context?: ContextUsage;
+  /** What the session's requests consumed. */
+  consumed: UsageTotalsV2;
+}
+
+function canonicalOf(totals: UsageTotalsV2): CanonicalTokenUsage {
+  return {
+    source: totals.source,
+    ...(totals.input_tokens === undefined ? {} : { inputTokens: totals.input_tokens }),
+    ...(totals.output_tokens === undefined ? {} : { outputTokens: totals.output_tokens }),
+    ...(totals.cache_read_input_tokens === undefined
+      ? {}
+      : { cacheReadTokens: totals.cache_read_input_tokens }),
+    ...(totals.cache_creation_input_tokens === undefined
+      ? {}
+      : { cacheWriteTokens: totals.cache_creation_input_tokens }),
+    ...(totals.reasoning_tokens === undefined ? {} : { reasoningTokens: totals.reasoning_tokens }),
+    ...(totals.total_tokens === undefined ? {} : { totalTokens: totals.total_tokens }),
+    ...(totals.model_calls === undefined ? {} : { modelCalls: totals.model_calls }),
+  };
+}
+
+/** One provider's session usage from the ledger snapshot, or nothing before its first request. */
+function sessionUsage(
+  snapshot: UsageSnapshot,
+  provider: UsageProvider,
+): ProviderSessionUsage | undefined {
   const entries = snapshot.entries.filter((entry) => entry.provider === provider);
-  const totals = { input: 0, output: 0, read: 0, write: 0, requests: 0, calls: 0 };
-  for (const entry of entries) {
-    totals.input += entry.usage.input_tokens ?? 0;
-    totals.output += entry.usage.output_tokens ?? 0;
-    totals.read += entry.usage.cache_read_input_tokens ?? 0;
-    totals.write += entry.usage.cache_creation_input_tokens ?? 0;
-    totals.requests += entry.requests;
-    totals.calls += entry.usage.model_calls ?? 0;
+  if (entries.length === 0) {
+    return undefined;
   }
-  const count = (value: number) => value.toLocaleString('en-US');
+  const accumulator = createUsageAccumulator();
+  let requests = 0;
+  for (const entry of entries) {
+    requests += entry.requests;
+    addCanonicalUsage(accumulator, canonicalOf(entry.usage));
+  }
+  const consumed = serializeUsageTotals(accumulator);
   const context = snapshot.contexts?.[provider];
-  const window = context
-    ? `context ${count((context.input_tokens ?? 0) + (context.cache_read_input_tokens ?? 0) + (context.cache_creation_input_tokens ?? 0))} · `
-    : '';
-  const calls = totals.calls ? ` · ${count(totals.calls)} model calls` : '';
+  return {
+    requests,
+    ...(consumed.model_calls === undefined ? {} : { modelCalls: consumed.model_calls }),
+    source: consumed.source,
+    ...(context ? { context } : {}),
+    consumed,
+  };
+}
+
+type Counts = Pick<
+  UsageTotalsV2,
+  | 'input_tokens'
+  | 'cache_read_input_tokens'
+  | 'cache_creation_input_tokens'
+  | 'output_tokens'
+  | 'reasoning_tokens'
+  | 'total_tokens'
+>;
+
+const CONTEXT_FIELDS = [
+  ['input_tokens', 'input'],
+  ['cache_read_input_tokens', 'cache read'],
+  ['cache_creation_input_tokens', 'cache write'],
+] as const;
+const CONSUMED_FIELDS = [
+  ...CONTEXT_FIELDS,
+  ['output_tokens', 'output'],
+  ['reasoning_tokens', 'reasoning'],
+  ['total_tokens', 'total'],
+] as const;
+
+const count = (value: number) => value.toLocaleString('en-US');
+
+/** The counts that were reported; in a mixed total they are what is known, not the whole. */
+function countParts(
+  source: UsageSource,
+  counts: Counts,
+  fields: ReadonlyArray<readonly [keyof Counts, string]>,
+): string[] {
+  return fields.flatMap(([key, label]) => {
+    const value = counts[key];
+    if (value === undefined) {
+      return [];
+    }
+    return [source === 'mixed' ? `known ${label} ${count(value)}` : `${count(value)} ${label}`];
+  });
+}
+
+/** Shown for a provider or estimated total only: a mixed or unavailable one has no sound ratio. */
+function ratioPart(source: UsageSource, counts: Counts): string[] {
+  if (source !== 'provider' && source !== 'estimate') {
+    return [];
+  }
+  const ratio = cacheReadRatio({
+    inputTokens: counts.input_tokens,
+    cacheReadTokens: counts.cache_read_input_tokens,
+    cacheWriteTokens: counts.cache_creation_input_tokens,
+  });
+  if (ratio === undefined) {
+    return [];
+  }
+  const percent = `${(ratio * 100).toFixed(1)}%`;
+  return [`prompt cache read ratio ${source === 'estimate' ? `~${percent} (estimated)` : percent}`];
+}
+
+function contextLine(context: ContextUsage | undefined): string[] {
+  if (!context) {
+    return [];
+  }
+  if (context.source === 'unavailable') {
+    return ['Context: usage unavailable'];
+  }
+  const parts = [
+    ...countParts(context.source, context, CONTEXT_FIELDS),
+    ...ratioPart(context.source, context),
+  ];
+  return parts.length > 0 ? [`Context: ${parts.join(' · ')}`] : [];
+}
+
+function consumedLine(consumed: UsageTotalsV2): string[] {
+  if (consumed.source === 'unavailable') {
+    return ['Consumed: usage unavailable'];
+  }
+  const parts = countParts(consumed.source, consumed, CONSUMED_FIELDS);
+  return parts.length > 0 ? [`Consumed: ${parts.join(' · ')}`] : [];
+}
+
+function sessionLines(session: ProviderSessionUsage | undefined): string[] {
+  if (!session) {
+    return ['This session: 0 completed requests'];
+  }
+  const calls =
+    session.modelCalls === undefined ? '' : ` · ${count(session.modelCalls)} model calls`;
   return [
-    `This session: ${count(totals.requests)} completed requests${calls}`,
-    `Tokens: ${window}consumed ${count(totals.input)} input · cached ${count(totals.read)} read`,
-    `Output: ${count(totals.output)} · cache written ${count(totals.write)}`,
-    ...(entries.some((entry) => entry.source !== 'provider')
-      ? ['Includes estimated or unavailable counts; see session receipts for provenance.']
+    `This session: ${count(session.requests)} completed requests${calls}`,
+    ...contextLine(session.context),
+    ...consumedLine(session.consumed),
+    `Source: ${session.source}`,
+    ...(session.source === 'mixed'
+      ? ['Some requests did not report complete token telemetry.']
       : []),
   ];
 }
-
 /** Read-only account lookups are cached and coalesced independently of model requests. */
 export class ProviderUsageDashboard {
   private readonly cache = new Map<string, { expires: number; view: ProviderUsageView }>();
@@ -163,10 +295,14 @@ export class ProviderUsageDashboard {
   private withSession(view: ProviderUsageView, snapshot: UsageSnapshot): ProviderUsageView {
     return {
       ...view,
-      providers: view.providers.map((row) => ({
-        ...row,
-        details: [...row.details, ...sessionLines(snapshot, row.id)],
-      })),
+      providers: view.providers.map((row) => {
+        const session = sessionUsage(snapshot, row.id);
+        return {
+          ...row,
+          details: [...row.details, ...sessionLines(session)],
+          ...(session ? { session } : {}),
+        };
+      }),
     };
   }
 }
