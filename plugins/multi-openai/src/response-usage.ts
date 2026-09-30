@@ -1,4 +1,4 @@
-import type { MessagesResponse } from '../../multi-core/src/gateway/messages.ts';
+import { type MessagesResponse, toProtocolUsage } from '../../multi-core/src/gateway/messages.ts';
 import {
   type CanonicalTokenUsage,
   cacheReadRatio,
@@ -106,6 +106,29 @@ export function parseOpenAIResponseUsage(value: unknown): CanonicalTokenUsage {
   };
   const ratio = cacheReadRatio(usage);
   return ratio === undefined ? usage : { ...usage, cacheReadRatio: ratio };
+}
+
+/** The protocol usage for a response; its zeros for unknown counts are placeholders. */
+export function openAIProtocolUsage(usage: CanonicalTokenUsage): MessagesResponse['usage'] {
+  return toProtocolUsage(usage);
+}
+
+/**
+ * `multi_usage` for a response: the source, the accounting block, and the flat
+ * reasoning and total counts older readers still use, each only when known.
+ */
+export function responseUsageMetadata(
+  usage: CanonicalTokenUsage,
+  model: string,
+): NonNullable<MessagesResponse['multi_usage']> {
+  const accounting = openAIAccountingMetadata(usage);
+  return {
+    source: usage.source,
+    ...(accounting === undefined ? {} : { accounting }),
+    ...(usage.reasoningTokens === undefined ? {} : { reasoning_tokens: usage.reasoningTokens }),
+    ...(usage.totalTokens === undefined ? {} : { total_tokens: usage.totalTokens }),
+    model,
+  };
 }
 
 /** The `multi_usage.accounting` block: known counts only, or nothing when none is known. */

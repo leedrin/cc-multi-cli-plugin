@@ -17,6 +17,13 @@ import {
   safeguardResults,
 } from '../../multi-core/src/gateway/safeguards.ts';
 import { callId, toolName } from '../../multi-core/src/gateway/tools.ts';
+import {
+  isOpenAIResponsesUsage,
+  type OpenAIResponsesUsage,
+  openAIProtocolUsage,
+  parseOpenAIResponseUsage,
+  responseUsageMetadata,
+} from './response-usage.ts';
 
 // Anthropic Messages <-> OpenAI Responses, for native Claude Code workers.
 const SIGNATURE_PREFIX = 'multi-openai:';
@@ -61,17 +68,11 @@ export interface ResponsesRequest {
   stream: boolean;
 }
 
-interface ResponsesUsage {
-  input_tokens?: number;
-  output_tokens?: number;
-  input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
-}
-
 interface ResponsesResponse {
   id: string;
   status?: string;
   output?: ResponsesOutputItem[];
-  usage?: ResponsesUsage | null;
+  usage?: OpenAIResponsesUsage | null;
   incomplete_details?: { reason?: string };
   error?: { message?: string };
 }
@@ -174,23 +175,7 @@ function validResponse(value: unknown): boolean {
   if (value.status !== undefined && typeof value.status !== 'string') {
     return false;
   }
-  if (value.usage == null) {
-    return true;
-  }
-  if (!isRecord(value.usage)) {
-    return false;
-  }
-  const count = (v: unknown) =>
-    v === undefined || (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0);
-  const usage = value.usage;
-  return (
-    count(usage.input_tokens) &&
-    count(usage.output_tokens) &&
-    (usage.input_tokens_details === undefined ||
-      (isRecord(usage.input_tokens_details) &&
-        count(usage.input_tokens_details.cached_tokens) &&
-        count(usage.input_tokens_details.cache_write_tokens)))
-  );
+  return value.usage == null || isOpenAIResponsesUsage(value.usage);
 }
 
 /** Ignore new event types; validate every known field before narrowing JSON. */
@@ -660,24 +645,14 @@ class ResponseStream {
     this.emit('message_start', { message: { ...this.message, content: [] } });
   }
 
-  private finish(stopReason: StopReason, usage?: ResponsesUsage | null) {
+  private finish(stopReason: StopReason, usage?: OpenAIResponsesUsage | null) {
     const message = this.message;
     if (!message) {
       throw new Error('OpenAI stream omitted response.created');
     }
-    const cached = usage?.input_tokens_details?.cached_tokens ?? 0;
-    const written = usage?.input_tokens_details?.cache_write_tokens ?? 0;
-    message.usage = {
-      input_tokens: Math.max(0, (usage?.input_tokens ?? 0) - cached - written),
-      output_tokens: usage?.output_tokens ?? 0,
-      cache_read_input_tokens: cached,
-      cache_creation_input_tokens: written,
-    };
-    message.multi_usage = {
-      source: usage ? 'provider' : 'unavailable',
-      ...(usage ? { total_tokens: (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0) } : {}),
-      model: this.model,
-    };
+    const canonical = parseOpenAIResponseUsage(usage);
+    message.usage = openAIProtocolUsage(canonical);
+    message.multi_usage = responseUsageMetadata(canonical, this.model);
     message.stop_reason = stopReason;
     message.stop_sequence = this.stopped;
     const safeguard_results = safeguardResults(

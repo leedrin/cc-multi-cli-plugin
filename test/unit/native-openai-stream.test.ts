@@ -61,10 +61,10 @@ test('terminal-only text, reasoning and tool calls are recovered with usage and 
       ['text', 'thinking', 'tool_use'],
     );
     assert.equal(result.stop_reason, 'tool_use');
+    // The provider sent no cache_write_tokens, so no cache-creation count is invented.
     assert.deepEqual(result.usage, {
       input_tokens: 60,
       cache_read_input_tokens: 40,
-      cache_creation_input_tokens: 0,
       output_tokens: 20,
     });
     const next = toResponses(
@@ -87,7 +87,6 @@ test('message_start carries the local input estimate until the provider reports 
   assert.deepEqual(delta.usage, {
     input_tokens: 60,
     cache_read_input_tokens: 40,
-    cache_creation_input_tokens: 0,
     output_tokens: 20,
   });
 });
@@ -114,6 +113,44 @@ test('terminal usage variants: message_start is provisional and only the termina
   assert.equal(delta.usage.output_tokens, 20);
   assert.equal(result.multi_usage?.source, 'provider');
   assert.equal(result.multi_usage?.total_tokens, 120);
+  assert.deepEqual(result.multi_usage?.accounting, {
+    input_tokens: 60,
+    output_tokens: 20,
+    cache_read_input_tokens: 40,
+    total_tokens: 120,
+    cache_read_ratio: 0.4,
+  });
+});
+
+test('the terminal usage carries reasoning, cache writes and the provider total into multi_usage', async () => {
+  const result = await translate([
+    created,
+    completedWith({
+      input_tokens: 1000,
+      output_tokens: 200,
+      total_tokens: 1234,
+      input_tokens_details: { cached_tokens: 800, cache_write_tokens: 50 },
+      output_tokens_details: { reasoning_tokens: 120 },
+    }),
+  ]);
+  assert.deepEqual(result.usage, {
+    input_tokens: 150,
+    output_tokens: 200,
+    cache_read_input_tokens: 800,
+    cache_creation_input_tokens: 50,
+  });
+  assert.equal(result.multi_usage?.source, 'provider');
+  assert.equal(result.multi_usage?.reasoning_tokens, 120);
+  assert.equal(result.multi_usage?.total_tokens, 1234);
+  assert.deepEqual(result.multi_usage?.accounting, {
+    input_tokens: 150,
+    output_tokens: 200,
+    cache_read_input_tokens: 800,
+    cache_creation_input_tokens: 50,
+    reasoning_tokens: 120,
+    total_tokens: 1234,
+    cache_read_ratio: 0.8,
+  });
 });
 
 test('terminal usage variants: a completed response without usage is unavailable, not a provider zero', async () => {
@@ -121,8 +158,9 @@ test('terminal usage variants: a completed response without usage is unavailable
     const result = await translate([created, completedWith(usage)]);
     assert.equal(result.multi_usage?.source, 'unavailable');
     assert.equal(result.multi_usage?.total_tokens, undefined);
-    assert.equal(result.usage.input_tokens, 0);
-    assert.equal(result.usage.output_tokens, 0);
+    // The protocol zeros are placeholders: accounting carries nothing.
+    assert.equal(result.multi_usage?.accounting, undefined);
+    assert.deepEqual(result.usage, { input_tokens: 0, output_tokens: 0 });
   }
 });
 
@@ -148,26 +186,42 @@ test('terminal usage variants: partial usage keeps the known protocol counts', a
   assert.equal(result.usage.output_tokens, 0);
   const onlyOutput = await translate([created, completedWith({ output_tokens: 30 })]);
   assert.equal(onlyOutput.usage.output_tokens, 30);
-  assert.notEqual(onlyOutput.multi_usage?.source, 'unavailable');
+  assert.equal(onlyOutput.multi_usage?.source, 'mixed');
+  assert.deepEqual(onlyOutput.multi_usage?.accounting, { output_tokens: 30 });
 });
 
-test('terminal usage variants: null details are rejected as malformed until usage parsing accepts them', async () => {
-  // Current behaviour, locked so the change is deliberate: the validator accepts an absent
-  // input details object but not a null one, and ignores output details altogether. The OpenAI
-  // usage parser flips the input case to "accepted, fields unknown".
-  await assert.rejects(
-    translate([
+test('terminal usage variants: null detail objects are accepted and leave cache and reasoning unknown', async () => {
+  for (const details of [
+    { input_tokens_details: null },
+    { output_tokens_details: null },
+    { input_tokens_details: null, output_tokens_details: null },
+  ]) {
+    const result = await translate([
       created,
-      completedWith({ input_tokens: 100, output_tokens: 20, input_tokens_details: null }),
-    ]),
-    /malformed response\.completed event/,
-  );
-  const outputNull = await translate([
-    created,
-    completedWith({ input_tokens: 100, output_tokens: 20, output_tokens_details: null }),
-  ]);
-  assert.equal(outputNull.usage.input_tokens, 100);
-  assert.equal(outputNull.usage.output_tokens, 20);
+      completedWith({ input_tokens: 100, output_tokens: 20, ...details }),
+    ]);
+    assert.deepEqual(result.usage, { input_tokens: 100, output_tokens: 20 });
+    assert.equal(result.multi_usage?.source, 'provider');
+    assert.deepEqual(result.multi_usage?.accounting, {
+      input_tokens: 100,
+      output_tokens: 20,
+      total_tokens: 120,
+    });
+  }
+});
+
+test('terminal usage variants: a corrupt count fails the translation', async () => {
+  for (const usage of [
+    { input_tokens: -2, output_tokens: 1 },
+    { input_tokens: 1.5, output_tokens: 1 },
+    { input_tokens: 1, output_tokens: 1, output_tokens_details: { reasoning_tokens: -1 } },
+    { input_tokens: 1, output_tokens: 1, total_tokens: Number.MAX_SAFE_INTEGER + 1 },
+  ]) {
+    await assert.rejects(
+      translate([created, completedWith(usage)]),
+      /malformed response\.completed event/,
+    );
+  }
 });
 
 test('OpenAI reports unavailable per tool and an empty map without tools, including buffered replies', async () => {

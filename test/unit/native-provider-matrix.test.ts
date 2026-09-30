@@ -38,7 +38,6 @@ const MATRIX: readonly MatrixRow[] = [
     usage: {
       input_tokens: 60,
       cache_read_input_tokens: 40,
-      cache_creation_input_tokens: 0,
       output_tokens: 15,
     },
     source: 'provider',
@@ -48,8 +47,6 @@ const MATRIX: readonly MatrixRow[] = [
     model: 'multi/zen/gpt-5.6-luna',
     usage: {
       input_tokens: 1,
-      cache_read_input_tokens: 0,
-      cache_creation_input_tokens: 0,
       output_tokens: 1,
     },
     source: 'provider',
@@ -119,7 +116,24 @@ const harnessReply = (model: string): MessagesResponse => ({
   usage: { input_tokens: 3, output_tokens: 2 },
 });
 
-async function startMatrix(t: TestContext, options: { enabled?: readonly string[] } = {}) {
+/** The same stream with the terminal event's usage removed, as a provider that omits telemetry sends it. */
+const withoutUsage = (sse: string) =>
+  sse
+    .split('\n\n')
+    .filter(Boolean)
+    .map((frame) => {
+      const event = JSON.parse(frame.slice('data: '.length)) as {
+        response?: { usage?: unknown };
+      };
+      delete event.response?.usage;
+      return `data: ${JSON.stringify(event)}\n\n`;
+    })
+    .join('');
+
+async function startMatrix(
+  t: TestContext,
+  options: { enabled?: readonly string[]; noUsage?: boolean } = {},
+) {
   const hits: Record<string, number> = { anthropic: 0 };
   for (const provider of PROVIDERS) {
     hits[provider] = 0;
@@ -139,10 +153,10 @@ async function startMatrix(t: TestContext, options: { enabled?: readonly string[
     }
     if (url.includes('opencode.ai')) {
       hits.zen++;
-      return new Response(zenSse);
+      return new Response(options.noUsage ? withoutUsage(zenSse) : zenSse);
     }
     hits.openai++;
-    return new Response(openaiSse);
+    return new Response(options.noUsage ? withoutUsage(openaiSse) : openaiSse);
   };
   const harness = (provider: Provider, model: string) => ({
     validate: () => 4,
@@ -243,6 +257,19 @@ test('provider matrix: completion events keep each provider usage and source as 
     assert.equal(event.usageMetadata?.source, row.source, `${row.provider} source`);
     assert.equal(event.stopReason, 'end_turn', row.provider);
   }
+});
+
+test('provider matrix: OpenAI without usage answers once as unavailable; Zen still refuses it', async (t) => {
+  const { call, hits, completions } = await startMatrix(t, { noUsage: true });
+  const answered = await call(ask('multi/openai/gpt-6-astra'));
+  assert.equal(answered.status, 200);
+  assert.match(await answered.text(), /Done/);
+  assert.equal(hits.openai, 1, 'a paid request is never repeated');
+  assert.equal(completions.length, 1);
+  assert.equal(completions[0].usageMetadata?.source, 'unavailable');
+  assert.equal(completions[0].usageMetadata?.accounting, undefined);
+  const refused = await call(ask('multi/zen/gpt-5.6-luna'));
+  assert.match(await refused.text(), /Provider completed without token usage/);
 });
 
 test('provider matrix: the ledger holds one request per provider for the session', async (t) => {
