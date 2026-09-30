@@ -148,6 +148,10 @@ native record. Cache reuse and usage accounting remain provider-owned.
 The shared response builder reports a harness turn's last model call, its live
 context, in the standard usage fields and the turn's consumption in `multi_usage`
 ([docs/claude-mods.md](docs/claude-mods.md)); each adapter supplies both.
+Usage is canonical accounting (`gateway/usage-accounting.ts`): an unreported count is
+unknown, not zero, and a total's `source` is `provider`, `estimate`, `mixed`, or
+`unavailable`. `multi_usage.accounting` carries the counts; the receipt ledger (schema
+v2) and the `/multi-usage` dashboard read them ([docs/usage.md](docs/usage.md)).
 
 `HarnessSessionStore` (`gateway/harness-session.ts`) owns the loading gate,
 record validation, and lock lifetime. Persisted `saved` fields are separate from

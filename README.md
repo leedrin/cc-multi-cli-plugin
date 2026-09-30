@@ -71,8 +71,9 @@ Paste this into any coding agent:
 Launch with `claude-multi`. `/model` lists the external models next to Claude's; `/effort` sets effort where the model supports it. Provider workers run as subagents with live progress, elapsed time and cancellation; the Agent tool's `model` parameter picks which model of that provider runs. Claude's permission mode governs every provider; see [permissions](docs/permissions.md). Resume a saved session with `claude-multi --resume <session-id>`.
 
 Use `/multi-usage` to open a provider usage menu with quotas, billed spend where
-available, session tokens, and worker receipts. Set `MULTI_RECEIPTS_FILE` before
-launching to append JSONL receipts. See [usage and receipts](docs/usage.md).
+available, session tokens with the prompt cache read ratio, and worker receipts.
+`/multi-usage --text` prints the same data as plain text in any terminal. Set
+`MULTI_RECEIPTS_FILE` before launching to append JSONL receipts. See [usage and receipts](docs/usage.md).
 
 ## Platforms
 

@@ -6,6 +6,63 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for current direction and
 
 ## Unreleased
 
+- **Keep OpenAI token usage whole and tell unknown from zero.** The gateway kept
+  only input, output and cached-input counts from an OpenAI completion, and a
+  completion with no usage was recorded as zero. It now keeps output, cache reads
+  and writes, reasoning and the provider's total, subtracts cached tokens from
+  input (OpenAI counts them inside it), and marks a completion without usage
+  `unavailable`. A malformed usage object (negative, fractional or non-finite
+  counts) fails the response instead of being summed. `multi_usage` gains an
+  additive `accounting` block and a `source`; the flat `reasoning_tokens` and
+  `total_tokens` stay for now. The standard usage sent to Claude Code no longer
+  carries `cache_creation_input_tokens: 0` for a provider that did not report
+  it, and still carries placeholder zeros for unreported input and output so
+  Claude Code can continue. OpenCode Zen still refuses a completion without
+  usage.
+- **Receipt schema v2 — BREAKING for readers of `MULTI_RECEIPTS_FILE`.**
+  Receipts are written with `schemaVersion: 2`. A token count nobody reported is
+  omitted instead of written as `0`; every `usage` object has a `source`
+  (`provider`, `estimate`, `mixed`, `unavailable`); a failed or cancelled
+  receipt with no completed response is `{ "source": "unavailable" }` with
+  `incomplete: true` instead of zeros; `reasoning_tokens`, `total_tokens` and a
+  token-weighted `cache_read_ratio` (provider totals only) are recorded; the last
+  response's `context` stays apart from the totals. Existing v1 lines remain
+  valid. A reader that treats a missing field as zero reproduces the old
+  numbers.
+- **Show cache reads, reasoning and source in `/multi-usage`.** Each provider page
+  now lists `This session`, `Context` (the last response's live context) and
+  `Consumed` (everything the session used) separately, with the prompt cache read
+  ratio (`cache read / (uncached input + cache read + cache write)`), reasoning
+  and total tokens, and a `Source` line. Mixed totals list `known` counts and say
+  some requests did not report complete telemetry; unavailable usage reads
+  `Consumed: usage unavailable`. Claude Code's own usage display has no place for
+  a ratio and still shows the wire zeros when a provider sends no usage; see
+  [docs/usage.md](docs/usage.md).
+- **Make `/multi-usage` reachable when the pane is not.** `/multi-usage --text`
+  (or `text`) prints every provider's usage as plain text in any host, including
+  non-interactive runs, and any other argument is refused before the gateway is
+  asked. The plain command now falls back to that text, with the reason, when the
+  host places no pane or opening it fails. Multi does not detect hosts or use
+  focus timers.
+- **Draw the usage pane with Claude Code's own focus and scroll events.** The pane
+  was a `Client` surface module that read terminal keys; it is now drawn from hook
+  state with `Button` and `Text` elements, driven by `ui.focus`, `ui.press` and
+  `ui.scroll`. Tab moves between providers and controls, there are explicit
+  **Refresh** and **Close** buttons, receipts load the first time their tab is
+  shown, and closing and reopening starts on the overview. `usage-view.ts` stays
+  unreferenced for one release so the change can be reverted.
+- **Add metadata-only traces.** `MULTI_USAGE_TRACE=1` writes one JSON line per
+  terminal response with the provider, event, source and known counts
+  (`usagePresent: false` when usage is missing). `MULTI_UI_TRACE=1` writes the
+  pane's placement, focus, press, scroll and close events to Claude Code's debug
+  log without a session id. Neither writes prompts, replies, reasoning, tool data
+  or credentials, and both are off by default.
+- **Extend the live OpenAI probe and add host coverage.**
+  The opt-in probe `node test/live/native-openai-cache.ts` now reconciles the provider's terminal usage with the gateway's final usage,
+  the receipt ledger and the dashboard. New tests cover an OpenAI streaming turn
+  through to `/multi-usage`, a headless `--text` run, and a matrix of terminal
+  hosts; [docs/usage-host-checklist.md](docs/usage-host-checklist.md) is the
+  manual checklist for Orca and other hosts.
 - **Stop the gateway from altering native Claude requests.** Claude requests now
   reach Anthropic as Claude Code sent them, and Anthropic's answer or failure
   reaches Claude Code as it would natively. A tool call cut off by `max_tokens`

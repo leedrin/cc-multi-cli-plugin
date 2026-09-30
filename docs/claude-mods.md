@@ -99,7 +99,7 @@ instead of treating the example as a stable public specification.
 | Model and permission boundary | `classic.SessionStart`, `classic.UserPromptSubmit`, `$.session.model/cwd/id` | Records the effective Claude permission snapshot at prompt boundaries; it does not redesign provider permissions. |
 | Workers | `tool.call` (Agent), `tool.describe` (Agent), `agent.offer`, `agent.spawn`, `classic.SubagentStart`, `ui.render` (ToolUse, UserMessage) | Takes the Agent tool's `model` out before Claude's Agent schema check, resolves it against the provider worker catalog at spawn (labelling the task's description, which the running-agents list and its notification show), admits harness children against the current policy generation, and labels the Agent row with the resolved provider and model. The engine's compact line for parallel Agent calls reads the stored call, whose provider model its schema rejects, and draws those calls as a bare `Agent`; ctrl+o shows the labelled rows. |
 | Native action rows | `$.tool.register`, `turn.step`, `tool.describe`, `tool.check`, `tool.call`, `ui.render` for `ToolUse` and `ToolResult` | Registers a display tool per native tool name the gateway offers (again before a harness step when a harness announced new ones), defers them behind ToolSearch, allows only calls carrying a gateway-issued token, answers those with the native output from `POST /multi/mod/display`, and draws each row as Claude Code draws the built-in the native tool mirrors (Read, Bash, Grep, Glob, LS, Edit, Write), under the native tool's name. `ToolGroup` folding stays the engine's. |
-| Usage UI | `command.run`, `$.ui.open`, `$.ui.invalidate`, `ui.render` for `Pane`, `ui.message` | Opens the interactive usage pane, renders its literal `Client` module, and handles bounded refresh/receipt/toggle messages. |
+| Usage UI | `command.run`, `$.ui.open`, `$.ui.close`, `$.ui.invalidate`, `$.ui.resolve`, `$.ui.log`, `ui.render` for `Pane`, `ui.focus`, `ui.press`, `ui.scroll`, `ui.close` | Opens the usage pane and draws it straight from hook-held state as `Button` and `Text` elements. Focus, press and scroll events select the provider page, scroll the window, refresh, load receipts, and close. `/multi-usage --text` and a refused or failed placement answer with plain text instead. |
 | Lifecycle | `turn.step`, `turn.complete`, `session.detach`, `$.ui.status` | Updates telemetry, the status line and receipts, completes/cancels runs, and forgets session-scoped state. |
 | Compaction | `session.compact` | Keeps native-harness compaction provider-owned and generation-bound. |
 | Local control plane | `$.http.fetch`, `$.env.get` | Calls authenticated loopback `/multi/mod/*` routes with bounded bodies and timeouts. |
@@ -115,16 +115,27 @@ The implementation is deliberately split:
 | Layer | Responsibility |
 | --- | --- |
 | `plugins/multi-core/hooks/*.ts` | Register function hooks, react to Claude events, open/invalidate surfaces, and exchange UI messages. |
-| `plugins/multi-core/hooks/*-view.ts` | Render `Client` surfaces (the usage pane); module paths at call sites stay literal. |
+| `plugins/multi-core/hooks/usage-pane.ts`, `usage-format.ts` | Draw the usage pane from plain state (engine elements, no `Client`) and format the dashboard and receipts as pane lines or text. |
+| `plugins/multi-core/hooks/usage-view.ts` | The earlier `Client` module of the usage pane. Nothing references it; it stays one release so the migration can be reverted. |
 | `plugins/multi-core/hooks/rows.ts` | Register, gate, answer and draw the display rows of native harness actions. |
 | `plugins/multi-core/hooks/rows-view.ts` | Draw a display row as the Claude Code built-in it mirrors. |
 | `plugins/multi-core/hooks/worker-rows.ts` | Labels the Agent row and task notifications with `<provider> · <model>`. |
 | `plugins/multi-core/src/gateway/mod-*.ts`, `display-rows.ts`, `worker-catalog.ts` | Authenticate and bound Mod routes for policy, model/worker state, lifecycle, display rows, compaction, usage, and receipts; resolve the Agent tool's `model` against each provider's worker catalog. |
 | Provider adapters | Supply provider execution, state, authentication, and usage readers; never introduce a competing Claude Code UI channel. |
 
-Current usage UI follows the upstream shape: `command.run` opens a Pane,
-`ui.render` returns a `Client` with the literal module path
-`./usage-view.ts`, and `ui.message` handles client actions.
+The usage UI is engine-native. `command.run` fetches the dashboard, keeps a
+`UsagePaneState` per session (capped, dropped at `session.detach`), and opens the
+Pane. `ui.render` returns `Button` and `Text` elements drawn from that state;
+only the selected tab asks for `autoFocus`. `ui.focus` landing on a tab selects
+its page, `ui.press` answers Refresh, Close, Page Up/Down and the quota switch,
+and `ui.scroll` moves the window within the page. No key code, host name or
+focus timer is used: a host that places the pane but never gives it focus is a host
+problem, answered by `/multi-usage --text`. `MULTI_UI_TRACE=1` writes the
+placement and event metadata to the debug log (see [usage](usage.md)).
+
+The hook compiler follows `$` only into functions declared in the same file, so
+helpers that take `$` live in `usage.ts`; `usage-pane.ts` and `usage-format.ts`
+are pure and take the resolved elements or data.
 
 Claude Code reads a response's `input_tokens` plus its cache read and write counts
 as the live context window (`apiUsage`, the status line's fill, auto-compaction).
@@ -286,9 +297,13 @@ When adding a surface:
 
 1. Register the event in `plugins/multi-core/hooks/`. If it needs gateway data,
    use the authenticated local gateway client.
-2. Put interactive rendering in a surface module and pass its `Client.module`
-   as a literal string.
-3. Avoid a local `h` binding in JSX surface modules.
+2. Prefer drawing with engine elements from `ui.render` and answering
+   `ui.focus`, `ui.press` and `ui.scroll`. A `Client` surface module is for
+   state the engine cannot hold; its module path must be a literal string and it
+   must avoid a local `h` binding (JSX compiles to calls to it). Whatever the
+   surface, keep a plain-text path for hosts that place none.
+3. Give interactive controls stable `key` values and pass `autoFocus: true`
+   only to the control that should start focused; never `false`.
 4. Preserve `next(event)` behavior for events the Mod does not own.
 5. Bound retained state, payload size, refresh rate, and gateway latency.
 6. Add hook tests and gateway route tests for session isolation, stale state,
