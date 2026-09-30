@@ -224,3 +224,84 @@ test('a receipts load failure keeps the provider rows and says so', async ($, on
   expect(await pane.find({ type: 'Text', text: /quota 10%/, in: 'usage' })).toBeTruthy();
   await pane.unmount();
 });
+
+const fiveProviders = {
+  updatedAt: '2026-09-22T12:00:00Z',
+  providers: [
+    {
+      id: 'openai',
+      name: 'OpenAI / Codex',
+      status: 'ready',
+      summary: 'quota 10% used',
+      details: [
+        'This session: 1 completed requests',
+        'Context: 150 input · 800 cache read · prompt cache read ratio 80.0%',
+        'Consumed: 150 input · 800 cache read · 200 output · 120 reasoning · 1,200 total',
+        'Source: provider',
+      ],
+    },
+    {
+      id: 'cursor',
+      name: 'Cursor',
+      status: 'ready',
+      summary: 'Included plan',
+      details: ['Consumed: usage unavailable', 'Source: unavailable'],
+    },
+    { id: 'zen', name: 'OpenCode Zen', status: 'unavailable', summary: 'Unavailable', details: [] },
+    { id: 'antigravity', name: 'Antigravity', status: 'disabled', summary: 'Off', details: [] },
+    { id: 'grok', name: 'Grok Build', status: 'error', summary: 'Error', details: [] },
+  ],
+};
+
+async function textMode(
+  args: string,
+  $: Parameters<Parameters<typeof test>[1]>[0],
+  on: Parameters<Parameters<typeof test>[1]>[1],
+) {
+  const calls = { fetch: 0, open: 0 };
+  mock.env(on, {
+    MULTI_GATEWAY_TOKEN: 'secret',
+    MULTI_MOD_GATEWAY_URL: 'http://127.0.0.1:4000',
+  });
+  on('session.id', () => ({ value: 'session' }));
+  on('ui.open', () => {
+    calls.open++;
+    return { value: undefined };
+  });
+  on('http.fetch', () => {
+    calls.fetch++;
+    return {
+      value: { ok: true, status: 200, headers: {}, text: JSON.stringify(fiveProviders) },
+    };
+  });
+  const result = await $.command.run({ command: 'multi-usage', args });
+  return { result, calls };
+}
+
+test('--text and text print every provider without opening a pane or calling a model', async ($, on) => {
+  const { result, calls } = await textMode('--text', $, on);
+  expect(calls.open).toBe(0);
+  expect(calls.fetch).toBe(1);
+  const text = result.text ?? '';
+  for (const name of ['OpenAI / Codex', 'Cursor', 'OpenCode Zen', 'Antigravity', 'Grok Build']) {
+    expect(text).toContain(name);
+  }
+  expect(text).toContain('[disabled]');
+  expect(text).toContain('prompt cache read ratio 80.0%');
+  expect(text).toContain('120 reasoning');
+  expect(text).toContain('Consumed: usage unavailable');
+  expect(text).not.toContain('Output: 0');
+});
+
+test('the text alias prints the same usage as --text', async ($, on) => {
+  const alias = await textMode('text', $, on);
+  expect(alias.calls.open).toBe(0);
+  expect(alias.result.text).toContain('OpenAI / Codex [ready]');
+});
+
+test('any other argument is refused before the gateway is asked', async ($, on) => {
+  const { result, calls } = await textMode('foo', $, on);
+  expect(result.text).toBe('Use /multi-usage or /multi-usage --text.');
+  expect(calls.fetch).toBe(0);
+  expect(calls.open).toBe(0);
+});

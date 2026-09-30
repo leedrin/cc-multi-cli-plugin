@@ -1,20 +1,6 @@
 import type { ClientModule } from 'claude-code';
+import type { UsagePaneProps } from './usage-format.ts';
 
-type Provider = {
-  id: string;
-  name: string;
-  status: string;
-  summary: string;
-  details: string[];
-  url?: string;
-};
-export type UsagePaneProps = {
-  updatedAt: string;
-  providers: Provider[];
-  receiptLines?: string[];
-  error?: string;
-  quotaAdviceEnabled?: boolean;
-};
 type State = { selected: string; offset: number };
 
 const view: ClientModule<UsagePaneProps, State> = (props, surface) => {

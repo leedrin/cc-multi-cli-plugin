@@ -1,6 +1,12 @@
 import type { EngineInterface, Register } from 'claude-code';
 import { quotaAdvice } from './quota-advice.ts';
-import type { UsagePaneProps } from './usage-view.ts';
+import {
+  formatReceipts,
+  parseDashboard,
+  record,
+  renderUsageText,
+  type UsagePaneProps,
+} from './usage-format.ts';
 
 const panes = new Map<string, UsagePaneProps>();
 const advisorySessions = new Set<string>();
@@ -29,7 +35,7 @@ export const register = (
     if (!advisorySessions.has(session)) {
       return next(event);
     }
-    const snapshot = dashboard(
+    const snapshot = parseDashboard(
       await request($, `/multi/mod/usage?sessionId=${encodeURIComponent(session)}&view=providers`),
     );
     const result = await next(event);
@@ -43,15 +49,20 @@ export const register = (
     };
   });
   on('command.run', { command: 'multi-usage' }, async ($, event) => {
-    if (event.args.trim()) {
-      return { text: 'Use /multi-usage without arguments.' };
+    const args = event.args.trim();
+    const textOnly = args === '--text' || args === 'text';
+    if (args && !textOnly) {
+      return { text: 'Use /multi-usage or /multi-usage --text.' };
     }
     const session = await $.session.id();
-    const response = dashboard(
+    const response = parseDashboard(
       await request($, `/multi/mod/usage?sessionId=${encodeURIComponent(session)}&view=providers`),
     );
     if (!response) {
       return { text: 'Multi usage is unavailable. Launch this session with claude-multi.' };
+    }
+    if (textOnly) {
+      return { text: renderUsageText(response) };
     }
     if (panes.size >= 16) {
       panes.clear();
@@ -121,34 +132,11 @@ export const register = (
   });
 };
 
-function record(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-function dashboard(value: unknown): UsagePaneProps | undefined {
-  if (!record(value) || typeof value.updatedAt !== 'string' || !Array.isArray(value.providers)) {
-    return undefined;
-  }
-  if (
-    !value.providers.every(
-      (item) =>
-        record(item) &&
-        typeof item.id === 'string' &&
-        typeof item.name === 'string' &&
-        typeof item.status === 'string' &&
-        typeof item.summary === 'string' &&
-        Array.isArray(item.details) &&
-        item.details.every((line) => typeof line === 'string'),
-    )
-  ) {
-    return undefined;
-  }
-  return value as UsagePaneProps;
-}
 /** Props are plain data: a field without a value is left out, never set to undefined. */
 function updatePane(previous: UsagePaneProps, action: string, response: unknown): UsagePaneProps {
   const { error: _error, ...kept } = previous;
   if (action === 'refresh') {
-    const refreshed = dashboard(response);
+    const refreshed = parseDashboard(response);
     return refreshed
       ? {
           ...refreshed,
@@ -159,52 +147,12 @@ function updatePane(previous: UsagePaneProps, action: string, response: unknown)
         }
       : { ...previous, error: 'Refresh failed. Showing the previous values.' };
   }
-  if (!record(response) || !Array.isArray(response.receipts)) {
+  const lines = formatReceipts(response);
+  if (!lines) {
     return { ...previous, error: 'Could not load receipts.' };
   }
-  return {
-    ...kept,
-    receiptLines: response.receipts.slice(-20).reverse().flatMap(receiptLines),
-  };
+  return { ...kept, receiptLines: lines };
 }
-function receiptLines(value: unknown): string[] {
-  if (!record(value) || !record(value.usage)) {
-    return [];
-  }
-  const owner = typeof value.agentId === 'string' ? value.agentId : 'Main turn';
-  return [
-    `${owner} · ${String(value.outcome)}${value.incomplete ? ' (incomplete)' : ''} · ${String(value.time)}`,
-    `  ${receiptUsage(value.usage, value.requests, value.context)}`,
-    ...(Array.isArray(value.entries) ? value.entries.flatMap(receiptEntry) : []),
-  ];
-}
-/**
- * Context and consumption side by side: a harness that resends its whole context
- * on every model call without a cache reads as a small context and a large spend.
- */
-function receiptUsage(usage: Record<string, unknown>, requests: unknown, context: unknown) {
-  const count = (value: unknown) =>
-    typeof value === 'number' ? value.toLocaleString('en-US') : '0';
-  const calls =
-    typeof usage.model_calls === 'number' ? ` · ${count(usage.model_calls)} model calls` : '';
-  const window = record(context)
-    ? `context ${count(
-        [context.input_tokens, context.cache_read_input_tokens, context.cache_creation_input_tokens]
-          .filter((item) => typeof item === 'number')
-          .reduce((sum, item) => sum + item, 0),
-      )} · `
-    : '';
-  return `${String(requests)} requests${calls} · ${window}consumed ${count(usage.input_tokens)} input · cached ${count(usage.cache_read_input_tokens)} · ${count(usage.output_tokens)} output`;
-}
-function receiptEntry(value: unknown): string[] {
-  if (!record(value)) {
-    return [];
-  }
-  return [
-    `  ${String(value.provider)} · ${String(value.model ?? 'model unreported')} · effort ${String(value.effort ?? 'unreported')} · ${String(value.endpoint ?? 'endpoint unreported')} · ${String(value.source)}`,
-  ];
-}
-
 async function request($: EngineInterface, route: string): Promise<unknown> {
   const base = await $.env.get('MULTI_MOD_GATEWAY_URL');
   const token = await $.env.get('MULTI_GATEWAY_TOKEN');

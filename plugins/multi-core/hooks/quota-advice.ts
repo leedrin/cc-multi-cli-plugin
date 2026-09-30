@@ -1,4 +1,4 @@
-import type { UsagePaneProps } from './usage-view.ts';
+import type { UsagePaneProps } from './usage-format.ts';
 
 /** Only account summaries enter model context; receipts and worker data stay in the menu. */
 export function quotaAdvice(snapshot?: UsagePaneProps): string {

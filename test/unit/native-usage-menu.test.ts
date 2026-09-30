@@ -4,6 +4,7 @@ import test from 'node:test';
 // Load the actual Mod modules without requiring Claude's host-only type package
 // in the offline TypeScript project. All runtime imports in these modules are erased types.
 const hooksUrl = new URL('../../plugins/multi-core/hooks/usage.ts', import.meta.url);
+const formatUrl = new URL('../../plugins/multi-core/hooks/usage-format.ts', import.meta.url);
 const viewUrl = new URL('../../plugins/multi-core/hooks/usage-view.ts', import.meta.url);
 const dashboard = {
   updatedAt: 'today',
@@ -223,4 +224,83 @@ test('quota advice is opt-in, session scoped, advisory and removed on detach', a
   assert.deepEqual(await submit(engine, prompt, next), await next(prompt));
   assert.equal(reads, beforeDisabled);
   assert(!hooks.has('prompt.submit'));
+});
+
+test('receipt lines show unavailable usage as unavailable and leave unreported counts out', async () => {
+  const { formatReceipts, renderUsageText } = await import(formatUrl.href);
+  // Newest first: the ledger lists receipts oldest first.
+  const [complete, mixed, unavailable] = formatReceipts({
+    receipts: [
+      {
+        outcome: 'cancelled',
+        incomplete: true,
+        time: 't3',
+        requests: 0,
+        usage: { source: 'unavailable' },
+        entries: [],
+      },
+      {
+        agentId: 'w2',
+        outcome: 'completed',
+        time: 't2',
+        requests: 2,
+        usage: { source: 'mixed', input_tokens: 40, cache_read_input_tokens: 60 },
+        entries: [],
+      },
+      {
+        agentId: 'w1',
+        outcome: 'completed',
+        time: 't1',
+        requests: 1,
+        usage: { source: 'provider', input_tokens: 10, output_tokens: 0, reasoning_tokens: 4 },
+        context: { source: 'provider', input_tokens: 10 },
+        entries: [],
+      },
+    ],
+  }).reduce((groups: string[][], line: string) => {
+    if (line.startsWith('  ')) {
+      groups[groups.length - 1].push(line);
+    } else {
+      groups.push([line]);
+    }
+    return groups;
+  }, [] as string[][]);
+  assert.equal(complete[0], 'w1 · completed · t1');
+  assert.equal(
+    complete[1],
+    '  1 requests · context 10 · consumed 10 input · 0 output · 4 reasoning',
+  );
+  assert.equal(mixed[1], '  2 requests · consumed known input 40 · cached 60');
+  assert.equal(unavailable[0], 'Main turn · cancelled (incomplete) · t3');
+  assert.equal(unavailable[1], '  0 requests · consumed usage unavailable');
+  assert.equal(formatReceipts({}), undefined);
+  assert.equal(typeof renderUsageText, 'function');
+});
+
+test('renderUsageText needs only the dashboard data', async () => {
+  const { renderUsageText } = await import(formatUrl.href);
+  const text = renderUsageText({
+    updatedAt: 'now',
+    providers: [
+      {
+        id: 'grok',
+        name: 'Grok Build',
+        status: 'ready',
+        summary: 'no quota',
+        details: ['Source: estimate'],
+        url: 'https://x.ai/build',
+      },
+    ],
+  });
+  assert.equal(
+    text,
+    [
+      'Multi usage · account data checked now',
+      '',
+      'Grok Build [ready]',
+      '  no quota',
+      '  Source: estimate',
+      '  https://x.ai/build',
+    ].join('\n'),
+  );
 });
