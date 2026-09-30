@@ -1,4 +1,5 @@
 import type { SafeguardResults } from './safeguards.ts';
+import type { CanonicalTokenUsage, UsageSource } from './usage-accounting.ts';
 
 // ---------------------------------------------------------------------------
 // Anthropic Messages, as Claude Code sends them. These arrive as untrusted JSON:
@@ -86,6 +87,25 @@ interface Usage {
   cache_creation_input_tokens?: number;
 }
 
+/**
+ * The protocol usage Claude Code reads for a response: known counts as they are,
+ * cache counts only when known. The zeros for an unknown input or output satisfy
+ * the schema; they are placeholders and never accounting, so the ledger reads
+ * `multi_usage` instead.
+ */
+export function toProtocolUsage(usage: CanonicalTokenUsage): Usage {
+  return {
+    input_tokens: usage.inputTokens ?? 0,
+    output_tokens: usage.outputTokens ?? 0,
+    ...(usage.cacheReadTokens === undefined
+      ? {}
+      : { cache_read_input_tokens: usage.cacheReadTokens }),
+    ...(usage.cacheWriteTokens === undefined
+      ? {}
+      : { cache_creation_input_tokens: usage.cacheWriteTokens }),
+  };
+}
+
 export type ResponseContentBlock =
   | { type: 'text'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
@@ -103,7 +123,21 @@ export interface MessagesResponse {
   safeguard_results?: SafeguardResults;
   /** Provider accounting metadata; estimates are never presented as billed usage. */
   multi_usage?: {
-    source: 'provider' | 'estimate' | 'mixed' | 'unavailable';
+    source: UsageSource;
+    /**
+     * What the provider reported, with unknown kept apart from zero: a field that is
+     * absent was not reported. `usage` above is protocol compatibility only (its zeros
+     * for an unreported count are placeholders), so accounting reads this block first.
+     */
+    accounting?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      cache_read_input_tokens?: number;
+      cache_creation_input_tokens?: number;
+      reasoning_tokens?: number;
+      total_tokens?: number;
+      cache_read_ratio?: number;
+    };
     reasoning_tokens?: number;
     total_tokens?: number;
     /**

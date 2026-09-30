@@ -282,5 +282,5 @@ function consumption(usage: HarnessUsageFields | undefined) {
 
 type ConsumptionKey = Exclude<
   keyof NonNullable<MessagesResponse['multi_usage']>,
-  'source' | 'replayed' | 'model' | 'effort'
+  'source' | 'accounting' | 'replayed' | 'model' | 'effort'
 >;
