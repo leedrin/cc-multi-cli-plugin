@@ -92,6 +92,84 @@ test('message_start carries the local input estimate until the provider reports 
   });
 });
 
+const completedWith = (usage: unknown) => ({
+  type: 'response.completed',
+  response: { id: 'resp', output: [text], ...(usage === undefined ? {} : { usage }) },
+});
+
+test('terminal usage variants: message_start is provisional and only the terminal event is final', async () => {
+  const { events, emit } = capture();
+  const result = await fromResponses(stream([created, terminal([text])]), model, emit, {
+    inputTokens: 500,
+  });
+  const start = events.find((event) => event.type === 'message_start')?.value as {
+    message: { usage: unknown; multi_usage?: unknown };
+  };
+  assert.deepEqual(start.message.usage, { input_tokens: 500, output_tokens: 0 });
+  assert.equal(start.message.multi_usage, undefined);
+  const delta = events.find((event) => event.type === 'message_delta')?.value as {
+    usage: { input_tokens: number; output_tokens: number };
+  };
+  assert.equal(delta.usage.input_tokens, 60);
+  assert.equal(delta.usage.output_tokens, 20);
+  assert.equal(result.multi_usage?.source, 'provider');
+  assert.equal(result.multi_usage?.total_tokens, 120);
+});
+
+test('terminal usage variants: a completed response without usage is unavailable, not a provider zero', async () => {
+  for (const usage of [undefined, null]) {
+    const result = await translate([created, completedWith(usage)]);
+    assert.equal(result.multi_usage?.source, 'unavailable');
+    assert.equal(result.multi_usage?.total_tokens, undefined);
+    assert.equal(result.usage.input_tokens, 0);
+    assert.equal(result.usage.output_tokens, 0);
+  }
+});
+
+test('terminal usage variants: explicit provider zero output stays a provider report', async () => {
+  const result = await translate([
+    created,
+    completedWith({ input_tokens: 100, output_tokens: 0, input_tokens_details: {} }),
+  ]);
+  assert.equal(result.multi_usage?.source, 'provider');
+  assert.equal(result.usage.input_tokens, 100);
+  assert.equal(result.usage.output_tokens, 0);
+});
+
+test('terminal usage variants: partial usage keeps the known protocol counts', async () => {
+  // Only the protocol numbers are pinned here: how a partial report is labelled and totalled
+  // changes with the canonical accounting model.
+  const result = await translate([
+    created,
+    completedWith({ input_tokens: 100, input_tokens_details: { cached_tokens: 40 } }),
+  ]);
+  assert.equal(result.usage.input_tokens, 60);
+  assert.equal(result.usage.cache_read_input_tokens, 40);
+  assert.equal(result.usage.output_tokens, 0);
+  const onlyOutput = await translate([created, completedWith({ output_tokens: 30 })]);
+  assert.equal(onlyOutput.usage.output_tokens, 30);
+  assert.notEqual(onlyOutput.multi_usage?.source, 'unavailable');
+});
+
+test('terminal usage variants: null details are rejected as malformed until usage parsing accepts them', async () => {
+  // Current behaviour, locked so the change is deliberate: the validator accepts an absent
+  // input details object but not a null one, and ignores output details altogether. The OpenAI
+  // usage parser flips the input case to "accepted, fields unknown".
+  await assert.rejects(
+    translate([
+      created,
+      completedWith({ input_tokens: 100, output_tokens: 20, input_tokens_details: null }),
+    ]),
+    /malformed response\.completed event/,
+  );
+  const outputNull = await translate([
+    created,
+    completedWith({ input_tokens: 100, output_tokens: 20, output_tokens_details: null }),
+  ]);
+  assert.equal(outputNull.usage.input_tokens, 100);
+  assert.equal(outputNull.usage.output_tokens, 20);
+});
+
 test('OpenAI reports unavailable per tool and an empty map without tools, including buffered replies', async () => {
   const safeguards = [
     { type: 'dangerous_tool_use', classifier_context: { permission_mode: 'auto' } },
