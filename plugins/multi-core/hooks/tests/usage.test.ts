@@ -356,3 +356,56 @@ test('a placed pane is the normal path', async ($, on) => {
   const result = await fallbackRun($, on, () => ({ value: { isPlaced: true } }));
   expect(result.text).toBeUndefined();
 });
+
+async function mountedPane(
+  $: Parameters<Parameters<typeof test>[1]>[0],
+  on: Parameters<Parameters<typeof test>[1]>[1],
+  urls: string[],
+  closed: string[],
+) {
+  mock.env(on, {
+    MULTI_GATEWAY_TOKEN: 'secret',
+    MULTI_MOD_GATEWAY_URL: 'http://127.0.0.1:4000',
+  });
+  on('session.id', () => ({ value: 'buttons' }));
+  on('ui.open', () => ({ value: { isPlaced: true } }));
+  on('ui.invalidate', () => ({ value: undefined }));
+  on('ui.close', (_$, event) => {
+    closed.push(event.id);
+    return { value: undefined };
+  });
+  on('http.fetch', (_$, event) => {
+    urls.push(event.url);
+    return { value: { ok: true, status: 200, headers: {}, text: JSON.stringify(fiveProviders) } };
+  });
+  await $.command.run({ command: 'multi-usage', args: '' });
+  const pane = await $.ui.mount({
+    plugin: 'multi-core',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'multi-usage',
+    props: { title: 'Multi usage', isFocused: true, bodyColumns: 120 },
+  });
+  await pane.resize({ columns: 120, rows: 24, in: 'usage' });
+  return pane;
+}
+
+test('the Refresh button reloads the provider view from the gateway with refresh=true', async ($, on) => {
+  const urls: string[] = [];
+  const pane = await mountedPane($, on, urls, []);
+  expect(urls).toHaveLength(1);
+  expect(await pane.find({ type: 'Button', text: 'Refresh', in: 'usage' })).toBeTruthy();
+  await pane.press({ key: 'refresh' });
+  expect(urls).toHaveLength(2);
+  expect(urls[1]).toContain('view=providers&refresh=true&sessionId=buttons');
+  await pane.unmount();
+});
+
+test('the Close button closes the usage pane without a keyboard', async ($, on) => {
+  const closed: string[] = [];
+  const pane = await mountedPane($, on, [], closed);
+  expect(await pane.find({ type: 'Button', text: 'Close', in: 'usage' })).toBeTruthy();
+  await pane.press({ key: 'close' });
+  expect(closed).toEqual(['multi-usage']);
+  await pane.unmount();
+});

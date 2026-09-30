@@ -91,7 +91,7 @@ export const register = (
       return next(event);
     }
     const action = event.data.action;
-    if (action !== 'refresh' && action !== 'receipts' && action !== 'toggle-quota-advice') {
+    if (!['refresh', 'receipts', 'toggle-quota-advice', 'close'].includes(String(action))) {
       return next(event);
     }
     const session = await $.session.id();
@@ -99,28 +99,45 @@ export const register = (
     if (!previous) {
       return next(event);
     }
-    if (action === 'toggle-quota-advice') {
-      const enabled = !advisorySessions.has(session);
-      if (enabled) {
-        advisorySessions.add(session);
-      } else {
-        advisorySessions.delete(session);
-      }
-      const props = { ...previous, quotaAdviceEnabled: enabled };
-      panes.set(session, props);
-      return { props };
-    }
-    const route =
-      action === 'refresh'
-        ? `/multi/mod/usage?view=providers&refresh=true&sessionId=${encodeURIComponent(session)}`
-        : `/multi/mod/receipts?sessionId=${encodeURIComponent(session)}`;
-    const response = await request($, route);
-    const props = updatePane(previous, action, response);
-    panes.set(session, props);
-    return { props };
+    return { props: await paneAction($, session, previous, String(action)) };
   });
 };
 
+/** Applies one pane action for a session and returns the props the pane shows next. */
+async function paneAction(
+  $: EngineInterface,
+  session: string,
+  previous: UsagePaneProps,
+  action: string,
+): Promise<UsagePaneProps> {
+  if (action === 'close') {
+    panes.delete(session);
+    try {
+      await $.ui.close({ id: 'multi-usage' });
+    } catch {
+      // A pane that is already gone needs no closing.
+    }
+    return previous;
+  }
+  if (action === 'toggle-quota-advice') {
+    const enabled = !advisorySessions.has(session);
+    if (enabled) {
+      advisorySessions.add(session);
+    } else {
+      advisorySessions.delete(session);
+    }
+    const props = { ...previous, quotaAdviceEnabled: enabled };
+    panes.set(session, props);
+    return props;
+  }
+  const route =
+    action === 'refresh'
+      ? `/multi/mod/usage?view=providers&refresh=true&sessionId=${encodeURIComponent(session)}`
+      : `/multi/mod/receipts?sessionId=${encodeURIComponent(session)}`;
+  const props = updatePane(previous, action, await request($, route));
+  panes.set(session, props);
+  return props;
+}
 /**
  * Opens the pane. A host may place no pane, or throw; the same data is always readable as
  * text, which is returned instead. An older build returns nothing from `open`, which

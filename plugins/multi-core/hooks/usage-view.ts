@@ -62,12 +62,23 @@ const view: ClientModule<UsagePaneProps, State> = (props, surface) => {
       ...lines.slice(offset, offset + height).map((line) => Text({ children: line })),
       Text({
         dimColor: true,
-        children: `${offset + 1}–${Math.min(lines.length, offset + height)} of ${lines.length} · ←/→ providers · ↑/↓ scroll · r refresh · Esc close`,
+        children: `${offset + 1}–${Math.min(lines.length, offset + height)} of ${lines.length} · ←/→ providers · ↑/↓ scroll · r refresh · Esc or Close button`,
       }),
-      Button({
-        key: 'refresh',
-        label: 'Refresh',
-        onPress: () => surface.post({ action: refreshAction }),
+      Box({
+        flexDirection: 'row',
+        gap: 1,
+        children: [
+          Button({
+            key: 'refresh',
+            label: 'Refresh',
+            onPress: () => surface.post({ action: refreshAction }),
+          }),
+          Button({
+            key: 'close',
+            label: 'Close',
+            onPress: () => surface.post({ action: 'close' }),
+          }),
+        ],
       }),
     ],
   });
