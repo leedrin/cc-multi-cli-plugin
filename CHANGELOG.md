@@ -6,6 +6,10 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for current direction and
 
 ## Unreleased
 
+- **Document Windows PowerShell installation troubleshooting.** The Usage branch
+  installation guide covers the profile-path workaround, execution policy errors,
+  explicit `.cmd` launch commands, and updating the local plugin cache.
+
 - **Keep Usage enhancements compatible with upstream 0.4.0.** Usage accounting follows
   the shared core Responses translator. The engine-native pane keeps its navigation
   in Claude Mods state and uses the shared authenticated gateway client and clock.
