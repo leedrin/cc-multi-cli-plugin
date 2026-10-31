@@ -1,12 +1,14 @@
-import { expect, mock, test } from 'claude-code/testing';
+import { expect, mock, type TestBody, test } from 'claude-code/testing';
 
 test('usage command reads only the current session without model dispatch', async ($, on) => {
+  mock.clock(on);
   mock.env(on, {
     MULTI_GATEWAY_TOKEN: 'secret',
     MULTI_MOD_GATEWAY_URL: 'http://127.0.0.1:4000',
   });
   on('session.id', () => ({ value: 'session/one' }));
-  on('ui.open', () => ({ value: undefined }));
+  // Exercise the void result returned by older Claude builds.
+  on('ui.open', (() => ({ value: undefined })) as never);
   on('http.fetch', (_$, event) => {
     expect(event.url).toBe(
       'http://127.0.0.1:4000/multi/mod/usage?sessionId=session%2Fone&view=providers',
@@ -48,13 +50,13 @@ test('usage command reads only the current session without model dispatch', asyn
       },
     };
   });
-  const result = await $.command.run({ command: 'multi-usage', args: '' });
+  const result = await $.command.run({ command: 'multi-usage', args: '' } as never);
   expect(result.text).toBeUndefined();
   const rendered = await $.ui.render({
     surface: 'terminal',
     component: 'Pane',
     requestId: 'multi-usage',
-    props: { title: 'Multi usage', isFocused: true, bodyColumns: 80 },
+    props: { title: 'Multi usage', isFocused: true, bodyColumns: 80 } as never,
   });
   // The hook draws the tree itself: Buttons, not a Client module.
   expect(JSON.stringify(rendered)).not.toContain('usage-view.ts');
@@ -63,6 +65,7 @@ test('usage command reads only the current session without model dispatch', asyn
 });
 
 test('worker completion awaits accounting and preserves the engine answer', async ($, on) => {
+  mock.clock(on);
   mock.env(on, {
     MULTI_GATEWAY_TOKEN: 'secret',
     MULTI_MOD_GATEWAY_URL: 'http://127.0.0.1:4000',
@@ -120,26 +123,32 @@ test('worker completion awaits accounting and preserves the engine answer', asyn
 });
 
 test('usage without a gateway reports unavailable without opening a pane', async ($, on) => {
+  mock.clock(on);
   mock.env(on, {});
   on('session.id', () => ({ value: 'session' }));
-  const result = await $.command.run({ command: 'multi-usage', args: '' });
+  const result = await $.command.run({ command: 'multi-usage', args: '' } as never);
   expect(result.text).toContain('unavailable');
 });
 
 test('ordinary prompt submission no longer runs the quota advisory', async ($, on) => {
   on('prompt.submit', (_$, event) => ({ text: event.text, context: event.context }));
-  const result = await $.prompt.submit({ text: 'Choose a worker', context: ['Existing guidance'] });
+  const result = await $.prompt.submit({
+    text: 'Choose a worker',
+    context: ['Existing guidance'],
+  } as never);
   expect(result.text).toBe('Choose a worker');
   expect(result.context).toEqual(['Existing guidance']);
 });
 
 test('receipts show a worker context beside what it consumed', async ($, on) => {
+  mock.clock(on);
   mock.env(on, {
     MULTI_GATEWAY_TOKEN: 'secret',
     MULTI_MOD_GATEWAY_URL: 'http://127.0.0.1:4000',
   });
   on('session.id', () => ({ value: 'session' }));
-  on('ui.open', () => ({ value: undefined }));
+  // Exercise the void result returned by older Claude builds.
+  on('ui.open', (() => ({ value: undefined })) as never);
   on('http.fetch', (_$, event) => {
     const body = event.url.includes('/multi/mod/receipts')
       ? {
@@ -168,13 +177,13 @@ test('receipts show a worker context beside what it consumed', async ($, on) => 
       : { updatedAt: '2026-09-22T12:00:00Z', providers: [] };
     return { value: { ok: true, status: 200, headers: {}, text: JSON.stringify(body) } };
   });
-  await $.command.run({ command: 'multi-usage', args: '' });
+  await $.command.run({ command: 'multi-usage', args: '' } as never);
   const pane = await $.ui.mount({
     plugin: 'multi-core',
     surface: 'terminal',
     component: 'Pane',
     requestId: 'multi-usage',
-    props: { title: 'Multi usage', isFocused: true, bodyColumns: 120 },
+    props: { title: 'Multi usage', isFocused: true, bodyColumns: 120 } as never,
   });
   await pane.press({ key: 'tab:receipts' });
   expect((await pane.find({ type: 'Text', text: /^antigravity-gemini/ }))?.text).toBe(
@@ -187,12 +196,14 @@ test('receipts show a worker context beside what it consumed', async ($, on) => 
 });
 
 test('a receipts load failure keeps the provider rows and says so', async ($, on) => {
+  mock.clock(on);
   mock.env(on, {
     MULTI_GATEWAY_TOKEN: 'secret',
     MULTI_MOD_GATEWAY_URL: 'http://127.0.0.1:4000',
   });
   on('session.id', () => ({ value: 'session' }));
-  on('ui.open', () => ({ value: undefined }));
+  // Exercise the void result returned by older Claude builds.
+  on('ui.open', (() => ({ value: undefined })) as never);
   on('http.fetch', (_$, event) => {
     if (event.url.includes('/multi/mod/receipts')) {
       return { value: { ok: false, status: 500, headers: {}, text: '{}' } };
@@ -205,13 +216,13 @@ test('a receipts load failure keeps the provider rows and says so', async ($, on
     };
     return { value: { ok: true, status: 200, headers: {}, text: JSON.stringify(body) } };
   });
-  await $.command.run({ command: 'multi-usage', args: '' });
+  await $.command.run({ command: 'multi-usage', args: '' } as never);
   const pane = await $.ui.mount({
     plugin: 'multi-core',
     surface: 'terminal',
     component: 'Pane',
     requestId: 'multi-usage',
-    props: { title: 'Multi usage', isFocused: true, bodyColumns: 120 },
+    props: { title: 'Multi usage', isFocused: true, bodyColumns: 120 } as never,
   });
   await pane.press({ key: 'tab:receipts' });
   expect(await pane.find({ type: 'Text', text: /Could not load receipts\./ })).toBeTruthy();
@@ -248,12 +259,9 @@ const fiveProviders = {
   ],
 };
 
-async function textMode(
-  args: string,
-  $: Parameters<Parameters<typeof test>[1]>[0],
-  on: Parameters<Parameters<typeof test>[1]>[1],
-) {
+async function textMode(args: string, $: Parameters<TestBody>[0], on: Parameters<TestBody>[1]) {
   const calls = { fetch: 0, open: 0 };
+  mock.clock(on);
   mock.env(on, {
     MULTI_GATEWAY_TOKEN: 'secret',
     MULTI_MOD_GATEWAY_URL: 'http://127.0.0.1:4000',
@@ -261,7 +269,7 @@ async function textMode(
   on('session.id', () => ({ value: 'session' }));
   on('ui.open', () => {
     calls.open++;
-    return { value: undefined };
+    return { value: { isPlaced: true as const } };
   });
   on('http.fetch', () => {
     calls.fetch++;
@@ -269,7 +277,7 @@ async function textMode(
       value: { ok: true, status: 200, headers: {}, text: JSON.stringify(fiveProviders) },
     };
   });
-  const result = await $.command.run({ command: 'multi-usage', args });
+  const result = await $.command.run({ command: 'multi-usage', args } as never);
   return { result, calls };
 }
 
@@ -302,11 +310,12 @@ test('any other argument is refused before the gateway is asked', async ($, on) 
 });
 
 async function fallbackRun(
-  $: Parameters<Parameters<typeof test>[1]>[0],
-  on: Parameters<Parameters<typeof test>[1]>[1],
+  $: Parameters<TestBody>[0],
+  on: Parameters<TestBody>[1],
   open: () => { value: { isPlaced: boolean; reason?: string } | undefined } | never,
   close: () => { value: undefined } | never = () => ({ value: undefined }),
 ) {
+  mock.clock(on);
   mock.env(on, {
     MULTI_GATEWAY_TOKEN: 'secret',
     MULTI_MOD_GATEWAY_URL: 'http://127.0.0.1:4000',
@@ -317,7 +326,7 @@ async function fallbackRun(
   on('http.fetch', () => ({
     value: { ok: true, status: 200, headers: {}, text: JSON.stringify(fiveProviders) },
   }));
-  return $.command.run({ command: 'multi-usage', args: '' });
+  return $.command.run({ command: 'multi-usage', args: '' } as never);
 }
 
 test('an open that throws falls back to the full text', async ($, on) => {
@@ -352,11 +361,12 @@ test('a placed pane is the normal path', async ($, on) => {
 });
 
 async function mountedPane(
-  $: Parameters<Parameters<typeof test>[1]>[0],
-  on: Parameters<Parameters<typeof test>[1]>[1],
+  $: Parameters<TestBody>[0],
+  on: Parameters<TestBody>[1],
   urls: string[],
   closed: string[],
 ) {
+  mock.clock(on);
   mock.env(on, {
     MULTI_GATEWAY_TOKEN: 'secret',
     MULTI_MOD_GATEWAY_URL: 'http://127.0.0.1:4000',
@@ -371,13 +381,13 @@ async function mountedPane(
     urls.push(event.url);
     return { value: { ok: true, status: 200, headers: {}, text: JSON.stringify(fiveProviders) } };
   });
-  await $.command.run({ command: 'multi-usage', args: '' });
+  await $.command.run({ command: 'multi-usage', args: '' } as never);
   const pane = await $.ui.mount({
     plugin: 'multi-core',
     surface: 'terminal',
     component: 'Pane',
     requestId: 'multi-usage',
-    props: { title: 'Multi usage', isFocused: true, bodyColumns: 120 },
+    props: { title: 'Multi usage', isFocused: true, bodyColumns: 120 } as never,
   });
   return pane;
 }
@@ -389,7 +399,7 @@ test('the Refresh button reloads the provider view from the gateway with refresh
   expect(await pane.find({ type: 'Button', text: 'Refresh' })).toBeTruthy();
   await pane.press({ key: 'action:refresh' });
   expect(urls).toHaveLength(2);
-  expect(urls[1]).toContain('view=providers&refresh=true&sessionId=buttons');
+  expect(urls[1]).toContain('sessionId=buttons&view=providers&refresh=true');
   await pane.unmount();
 });
 
@@ -399,5 +409,33 @@ test('the Close button closes the usage pane without a keyboard', async ($, on) 
   expect(await pane.find({ type: 'Button', text: 'Close' })).toBeTruthy();
   await pane.press({ key: 'action:close' });
   expect(closed).toEqual(['multi-usage']);
+  await pane.unmount();
+});
+
+test('quota advice survives redraws and is cleared when the session ends', async ($, on) => {
+  on('tool.call', () => ({ result: 'launched' }));
+  on('session.end', (_$, event) => ({ sessionId: event.sessionId }));
+  on('ui.status', () => ({ value: undefined }));
+  const urls: string[] = [];
+  const pane = await mountedPane($, on, urls, []);
+  const adviceReads = async () => {
+    urls.length = 0;
+    await $.tool.call({
+      tool: 'Agent',
+      tool_use_id: 'quota-call',
+      prompt: 'work',
+      subagent_type: 'cursor',
+    } as never);
+    return urls.filter((url) => url.includes('/multi/mod/usage?')).length;
+  };
+  expect(await adviceReads()).toBe(0);
+  await pane.press({ key: 'action:quota-advice' });
+  expect(await adviceReads()).toBe(1);
+  await pane.press({ key: 'action:quota-advice' });
+  expect(await adviceReads()).toBe(0);
+  await pane.press({ key: 'action:quota-advice' });
+  expect(await adviceReads()).toBe(1);
+  await $.session.end({ reason: 'clear', sessionId: 'buttons', resume: { id: 'x' } } as never);
+  expect(await adviceReads()).toBe(0);
   await pane.unmount();
 });

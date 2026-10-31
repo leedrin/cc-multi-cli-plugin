@@ -1,10 +1,20 @@
 import assert from 'node:assert/strict';
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 
-// Load the actual Mod modules without requiring Claude's host-only type package
-// in the offline TypeScript project. All runtime imports in these modules are erased types.
+// Load the actual Mod modules, substituting only the host-owned state operations.
 const hooksUrl = new URL('../../plugins/multi-core/hooks/usage.ts', import.meta.url);
 const formatUrl = new URL('../../plugins/multi-core/hooks/usage-format.ts', import.meta.url);
+const stateUrl = new URL('./fixtures/claude-state.ts', import.meta.url);
+// Only the host's state primitives are stubbed; the controller and gateway client stay real.
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier === 'claude-code' && context.parentURL?.split('?')[0] === hooksUrl.href) {
+      return { url: stateUrl.href, shortCircuit: true };
+    }
+    return nextResolve(specifier, context);
+  },
+});
 const dashboard = {
   updatedAt: 'today',
   providers: [
@@ -80,6 +90,7 @@ async function paneHarness(options: { receiptsFail?: boolean; trace?: string[] }
       },
     },
     session: { id: async () => session },
+    clock: { sleep: () => new Promise<void>(() => {}) },
     http: {
       fetch: async (url: string) => {
         requests.push(url);
@@ -113,7 +124,7 @@ async function paneHarness(options: { receiptsFail?: boolean; trace?: string[] }
       log: (text: string) => {
         options.trace?.push(text);
       },
-      resolve: async () => factories,
+      resolve: () => factories,
     },
   };
   const module = await import(hooksUrl.href);
@@ -133,6 +144,12 @@ async function paneHarness(options: { receiptsFail?: boolean; trace?: string[] }
     requests,
     closed,
     passed,
+    reload: async () => {
+      const fresh = await import(`${hooksUrl.href}?reload`);
+      fresh.register((name: string, filter: unknown, hook?: PaneHook) => {
+        hooks.set(name, typeof filter === 'function' ? (filter as PaneHook) : (hook as PaneHook));
+      });
+    },
     setSession: (value: string) => {
       session = value;
     },
@@ -193,6 +210,7 @@ test('focus on a tab selects it and resets the scroll; focus elsewhere changes n
   const harness = await paneHarness();
   await harness.open();
   await harness.focus('provider:openai');
+  await harness.reload();
   assert.equal(footer(await harness.draw()), '1–4 of 42 · Tab moves between controls');
   await harness.scroll(10);
   assert.equal(footer(await harness.draw()), '11–14 of 42 · Tab moves between controls');
@@ -244,7 +262,7 @@ test('receipts load once on first selection; Refresh reloads the page that is sh
   assert(harness.requests[2].includes('/multi/mod/receipts?'));
   await harness.press('tab:all');
   await harness.press('action:refresh');
-  assert(harness.requests[3].includes('view=providers&refresh=true&sessionId=session%2Fone'));
+  assert(harness.requests[3].includes('sessionId=session%2Fone&view=providers&refresh=true'));
   assert.equal(harness.requests.length, 4);
 });
 
@@ -321,7 +339,6 @@ test('Close closes the pane and forgets its state; a host close does too', async
 
 test('pane state is kept per session, capped, and dropped when the session goes', async () => {
   const harness = await paneHarness();
-  const module = await import(hooksUrl.href);
   harness.setSession('first');
   await harness.open();
   await harness.focus('provider:openai');
@@ -333,7 +350,7 @@ test('pane state is kept per session, capped, and dropped when the session goes'
       (button) => button.props.key === 'provider:openai' && button.props.autoFocus === true,
     ),
   );
-  module.forgetUsageSession('first');
+  await harness.close();
   assert.equal(await harness.draw(), undefined);
   for (let index = 0; index < 17; index++) {
     harness.setSession(`many-${index}`);
@@ -344,7 +361,7 @@ test('pane state is kept per session, capped, and dropped when the session goes'
   harness.setSession('many-16');
   assert((await harness.draw()) !== undefined);
 });
-test('quota advice is opt-in, session scoped, advisory and removed on detach', async () => {
+test('quota advice is opt-in, session scoped and advisory', async () => {
   const module = await import(hooksUrl.href);
   let session = 'advice-one';
   let reads = 0;
@@ -354,6 +371,7 @@ test('quota advice is opt-in, session scoped, advisory and removed on detach', a
       get: async (name: string) => (name === 'MULTI_GATEWAY_TOKEN' ? 'secret' : 'http://localhost'),
     },
     session: { id: async () => session, model: async () => 'claude-sonnet-5' },
+    clock: { sleep: () => new Promise<void>(() => {}) },
     http: {
       fetch: async () => {
         reads++;
@@ -437,10 +455,7 @@ test('quota advice is opt-in, session scoped, advisory and removed on detach', a
   const beforeDisabled = reads;
   assert.deepEqual(await submit(engine, prompt, next), await next(prompt));
   assert.equal(reads, beforeDisabled);
-  await press(engine, toggle, next);
-  module.forgetUsageSession(session);
-  assert.deepEqual(await submit(engine, prompt, next), await next(prompt));
-  assert.equal(reads, beforeDisabled);
+  // Session-end cleanup is exercised through the actual lifecycle hook in usage.test.ts.
   assert(!hooks.has('prompt.submit'));
 });
 

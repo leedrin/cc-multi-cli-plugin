@@ -1,4 +1,5 @@
 import type { Elements } from 'claude-code';
+import type { MultiCoreUsagePaneState } from '../types/multi-core.d.ts';
 import type { UsagePaneProps } from './usage-format.ts';
 
 // The usage pane drawn straight from hook-held state. Claude Code's own focus ring, press and
@@ -18,19 +19,7 @@ const FALLBACK_COLUMNS = 80;
 /** Rows the pane spends on tabs, buttons and the footer around the scrolling text. */
 const CHROME_ROWS = 8;
 
-export type UsagePaneState = {
-  props: UsagePaneProps;
-  /** `all`, `receipts` or a provider id. */
-  selected: string;
-  /** The first body line shown. */
-  offset: number;
-  open: boolean;
-  loading: boolean;
-  receiptLoaded: boolean;
-  /** The body size the pane was last drawn or scrolled at. */
-  columns: number;
-  rows: number;
-};
+export type UsagePaneState = MultiCoreUsagePaneState;
 
 export function newPaneState(props: UsagePaneProps): UsagePaneState {
   return {

@@ -6,7 +6,6 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { AgentCatalog } from '../../plugins/multi-core/src/gateway/agent-catalog.ts';
 import {
   checkLauncherArgumentLimit,
   workerCatalog,
@@ -41,7 +40,7 @@ function windowsHome(root: string): NodeJS.ProcessEnv {
   };
 }
 
-test('launcher preserves native auth, disables unavailable auto mode, and merges caller settings', {
+test('launcher preserves native auth, keeps unreviewed auto mode available, and merges caller settings', {
   skip: process.platform === 'win32',
 }, async (t) => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), 'launcher-test-'));
@@ -56,7 +55,7 @@ if(args[0]==='--version'){console.log(process.env.TEST_CLAUDE_VERSION??'2.1.272'
 const result=(value)=>{const base=process.env.MULTI_MOD_GATEWAY_URL;if(!base){console.log(value);return}const url=new URL(base+'/multi/mod/session');const req=require('node:http').request(url,{method:'POST',headers:{'content-type':'application/json','x-multi-gateway-token':process.env.MULTI_GATEWAY_TOKEN}},()=>console.log(value));req.on('error',()=>console.log(value));req.end(JSON.stringify({sessionId:'fixture',event:'start'}));};
 if(args[0]==='auth'){if(process.env.TEST_AUTH==='malformed'){console.log('not-json');process.exit(0)}if(process.env.TEST_AUTH==='error'){process.exit(2)}if(process.env.TEST_AUTH==='missing'){console.log('{}');process.exit(0)}process.stdout.write(JSON.stringify({loggedIn:process.env.TEST_AUTH==='yes'}));process.exitCode=process.env.TEST_AUTH==='yes'?0:1}else{
 const settings=JSON.parse(fs.readFileSync(args[args.indexOf('--settings')+1],'utf8'));
- result(JSON.stringify({agentView:process.env.CLAUDE_CODE_DISABLE_AGENT_VIEW,backgroundTasks:process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS,functionHooks:process.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS,settings,models:args.filter(x=>x.startsWith('multi/')),args,settingsCount:args.filter(x=>x==='--settings').length,hasLocalToken:!!process.env.MULTI_GATEWAY_TOKEN,apiTimeout:process.env.API_TIMEOUT_MS,toolSearch:process.env.ENABLE_TOOL_SEARCH,auth:process.env.ANTHROPIC_API_KEY?'api':process.env.ANTHROPIC_AUTH_TOKEN?'local':'native'}));}
+ result(JSON.stringify({firstPath:(process.env.PATH||'').split(require('node:path').delimiter)[0],agentView:process.env.CLAUDE_CODE_DISABLE_AGENT_VIEW,backgroundTasks:process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS,functionHooks:process.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS,settings,models:args.filter(x=>x.startsWith('multi/')),args,settingsCount:args.filter(x=>x==='--settings').length,hasLocalToken:!!process.env.MULTI_GATEWAY_TOKEN,apiTimeout:process.env.API_TIMEOUT_MS,toolSearch:process.env.ENABLE_TOOL_SEARCH,auth:process.env.ANTHROPIC_API_KEY?'api':process.env.ANTHROPIC_AUTH_TOKEN?'local':'native'}));}
 `,
   );
   const launcher = fileURLToPath(
@@ -99,7 +98,12 @@ const settings=JSON.parse(fs.readFileSync(args[args.indexOf('--settings')+1],'ut
     assert.equal(result.args.at(-1), path.resolve(path.dirname(launcher), '../../..'));
     assert.equal(result.settingsCount, 1);
     assert.equal(result.settings.disableAgentView, true);
-    assert.equal(result.agentView, '1');
+    assert.equal(
+      result.agentView,
+      '0',
+      'the setting scopes agent view; the environment is left alone',
+    );
+    assert.match(result.firstPath, /multi-native-settings-[^/\\]+[/\\]bin$/);
     assert.equal(result.backgroundTasks, undefined);
     assert.equal(result.functionHooks, '1');
     assert.equal(
@@ -109,10 +113,7 @@ const settings=JSON.parse(fs.readFileSync(args[args.indexOf('--settings')+1],'ut
     );
     assert.equal(result.toolSearch, auth === 'api' ? 'false' : 'true');
     assert.deepEqual(result.settings.permissions.deny, ['Bash(denied)']);
-    assert.equal(
-      result.settings.permissions.disableAutoMode,
-      auth === 'no' ? 'disable' : undefined,
-    );
+    assert.equal(result.settings.permissions.disableAutoMode, undefined);
     assert.equal(
       result.hasLocalToken,
       true,
@@ -206,7 +207,7 @@ const settings=JSON.parse(fs.readFileSync(args[args.indexOf('--settings')+1],'ut
     [],
     'Keep the native saved model instead of forcing a launcher default',
   );
-  assert.equal(saved.settings.permissions.disableAutoMode, 'disable');
+  assert.equal(saved.settings.permissions?.disableAutoMode, undefined);
 });
 
 test('Zen credentials add picker models and named workers without leaking the key to Claude', {
@@ -278,7 +279,7 @@ result(JSON.stringify({settings,agents:Object.keys(agents),models:args.filter(x=
   // One Zen worker: its models are the picker's, never a type per model or effort.
   assert.deepEqual(result.agents, ['multi-zen']);
   assert.equal(result.zenKeyInChild, undefined);
-  assert.equal(result.settings.permissions.disableAutoMode, 'disable');
+  assert.equal(result.settings.permissions?.disableAutoMode, undefined);
   assert(result.args.includes('--dangerously-skip-permissions'));
   assert.deepEqual(result.models, ['multi/zen/gpt-5.6-luna']);
   const disabled = await promisify(execFile)(process.execPath, [launcher], {
@@ -497,27 +498,6 @@ result(JSON.stringify({settings,agents,args,models:args.filter(x=>x.startsWith('
   assert.equal(agents['multi-antigravity'].model, rows[0].model);
   assert.equal(agents['multi-antigravity'].effort, undefined);
   assert.match(agents['multi-antigravity'].description, /\(gemini, sonnet-thinking\)/);
-  const catalog = new AgentCatalog(
-    agents,
-    rows.map(({ model }) => model),
-  );
-  const listing = Object.entries(agents)
-    .map(([name, value]) => {
-      const worker = value as { description: string; tools: string[] };
-      return `- ${name}: ${worker.description} (Tools: ${worker.tools.join(', ')})`;
-    })
-    .join('\n');
-  const compacted = JSON.stringify(
-    catalog.compact({
-      messages: [
-        {
-          role: 'user',
-          content: `<system-reminder>\nAvailable agent types for the Agent tool:\n${listing}\n</system-reminder>`,
-        },
-      ],
-    }),
-  );
-  assert.match(compacted, /- multi-antigravity:/);
 
   // The opt-out has to stay reversible. A selection saved while rows were tagged is the
   // spelling the user copied out of the picker, so it must still name a row once the tag
@@ -585,7 +565,7 @@ test('launcher registers one worker per provider from the picker rows', () => {
   );
   const rows = [
     'multi/openai/gpt-6-luna',
-    'multi/openai/gpt-6-astra',
+    'multi/openai/gpt-6.1-sol',
     ...cursorPickerOptions(cursor).map(({ model }) => model),
     'multi/cursor/composer-2.5/effort=high',
     'multi/antigravity/gemini-3.1-pro[1m]',
@@ -603,7 +583,7 @@ test('launcher registers one worker per provider from the picker rows', () => {
     'multi-antigravity',
   ]);
   // Each default is the provider's newest or native default, not the first row.
-  assert.equal(agents['multi-openai'].model, 'multi/openai/gpt-6-astra');
+  assert.equal(agents['multi-openai'].model, 'multi/openai/gpt-6.1-sol');
   assert.equal(agents['multi-openai'].effort, 'medium');
   assert.equal(agents['multi-zen'].model, 'multi/zen/deepseek-v4.1-flash');
   assert.equal(agents['multi-zen'].effort, 'medium');
@@ -616,7 +596,7 @@ test('launcher registers one worker per provider from the picker rows', () => {
   );
   assert.equal(
     agents['multi-openai'].description,
-    "OpenAI worker (Claude Code's tools). Pass model (gpt-6-luna, gpt-6-astra) or omit it for gpt-6-astra.",
+    "OpenAI worker (Claude Code's tools). Pass model (gpt-6-luna, gpt-6.1-sol) or omit it for gpt-6.1-sol.",
   );
   assert.deepEqual(agents['multi-openai'].tools, ['Read', 'Grep', 'Glob', 'Bash', 'Edit', 'Write']);
   assert.equal(agents['multi-cursor'].tools.at(-1), 'mcp__multi-core');
@@ -683,4 +663,47 @@ test('the Zen model listing is available without authentication', async () => {
   });
   const models = JSON.parse(stdout);
   assert(models.some((model: { id: string }) => model.id === 'minimax-m2.7'));
+});
+
+test('a launch inside another Multi session starts from the user original environment', {
+  skip: process.platform === 'win32',
+}, async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), 'launcher-nested-test-'));
+  t.after(() => removeTemporary(cwd));
+  await mkdir(path.join(cwd, 'bin'));
+  await writeClaudeFixture(
+    path.join(cwd, 'bin'),
+    `#!/usr/bin/env node
+const args=process.argv.slice(2);
+if(args.includes('plugin')&&args.includes('list')){console.log('[]');process.exit(0)}
+if(args[0]==='--version'){console.log('2.1.272');process.exit(0)}
+if(args[0]==='auth'){process.stdout.write(JSON.stringify({loggedIn:true}));process.exit(0)}
+console.log(JSON.stringify({headers:process.env.ANTHROPIC_CUSTOM_HEADERS,orig:process.env.MULTI_ORIG_ANTHROPIC_BASE_URL,origHeaders:process.env.MULTI_ORIG_ANTHROPIC_CUSTOM_HEADERS,base:process.env.ANTHROPIC_BASE_URL}));
+`,
+  );
+  const launcher = fileURLToPath(
+    new URL('../../plugins/multi-core/src/launcher.ts', import.meta.url),
+  );
+  const { stdout } = await promisify(execFile)(process.execPath, [launcher], {
+    cwd,
+    timeout: 20000,
+    env: {
+      PATH: path.join(cwd, 'bin') + path.delimiter + process.env.PATH,
+      HOME: cwd,
+      CLAUDE_CONFIG_DIR: path.join(cwd, 'claude'),
+      CODEX_HOME: cwd,
+      // What the outer Multi session left in this process.
+      MULTI_GATEWAY_TOKEN: 'outer-token',
+      ANTHROPIC_BASE_URL: 'http://127.0.0.1:1',
+      ANTHROPIC_CUSTOM_HEADERS: 'x-team: a\nx-multi-gateway-token: outer-token',
+      MULTI_ORIG_ANTHROPIC_BASE_URL: 'https://corp.example',
+      MULTI_ORIG_ANTHROPIC_CUSTOM_HEADERS: 'x-team: a',
+    },
+  });
+  const seen = JSON.parse(stdout);
+  assert.match(seen.base, /^http:\/\/127\.0\.0\.1:(?!1$)\d+$/);
+  assert.equal(seen.orig, 'https://corp.example');
+  assert.equal(seen.origHeaders, 'x-team: a');
+  assert(seen.headers.startsWith('x-team: a\nx-multi-gateway-token: '));
+  assert(!seen.headers.includes('outer-token'));
 });

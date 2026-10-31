@@ -5,7 +5,7 @@ import {
   isOpenAIResponsesUsage,
   openAIAccountingMetadata,
   parseOpenAIResponseUsage,
-} from '../../plugins/multi-openai/src/response-usage.ts';
+} from '../../plugins/multi-core/src/gateway/response-usage.ts';
 
 test('a full usage keeps every count, uncached input and the provider total', () => {
   const usage = parseOpenAIResponseUsage({

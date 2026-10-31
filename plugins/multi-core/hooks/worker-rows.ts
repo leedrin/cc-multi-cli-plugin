@@ -1,16 +1,17 @@
 import type { Register } from 'claude-code';
+import { atom, read } from 'claude-code';
+import { isProviderWorker } from '../src/gateway/provider-workers.ts';
 
-/**
- * The provider worker types. Each runs one provider's models, and its Agent call's
- * `model` picks which; the rows below keep that model in sight wherever the agent shows.
- */
-const PROVIDER_WORKERS = new Set([
-  'multi-openai',
-  'multi-zen',
-  'multi-cursor',
-  'multi-antigravity',
-  'multi-grok',
-]);
+// State values are named where they are read: the engine's scan reads an atom's plugin and key
+// from this file's own source, not across an import.
+const agentModels = atom(
+  { plugin: 'multi-core', key: 'agentModels' } as const,
+  {} as Record<string, string>,
+);
+const spawnModels = atom(
+  { plugin: 'multi-core', key: 'spawnModels' } as const,
+  {} as Record<string, string>,
+);
 
 const PROVIDER_LABELS: Readonly<Record<string, string>> = {
   openai: 'OpenAI',
@@ -19,10 +20,6 @@ const PROVIDER_LABELS: Readonly<Record<string, string>> = {
   antigravity: 'Antigravity',
   grok: 'Grok',
 };
-
-export function isProviderWorker(type: unknown): boolean {
-  return typeof type === 'string' && PROVIDER_WORKERS.has(type);
-}
 
 /** Provider display name for a `multi-*` subagent type, else undefined. */
 export function providerName(subagentType: unknown): string | undefined {
@@ -87,18 +84,15 @@ export function labelled(description: string, model: string): string {
  * completion) and a background agent's notification gain `<provider> · <model>`
  * beside their description; the stored input and message stay as they were.
  */
-export const register = (
-  on: Parameters<Register>[0],
-  agentModels: ReadonlyMap<string, string>,
-  spawnModels: ReadonlyMap<string, string>,
-) => {
-  on('ui.render', { component: 'ToolUse' }, async (_$, event, next) => {
+export const register = (on: Parameters<Register>[0]) => {
+  on('ui.render', { component: 'ToolUse' }, async ($, event, next) => {
     const input = record(event.props.input);
     if (event.props.tool !== 'Agent' || !input || !isProviderWorker(input.subagent_type)) {
       return next(event);
     }
+    // Read from state while drawing: a spawn that resolves its model redraws the row.
     const label = workerLabel(
-      spawnModels.get(event.props.tool_use_id) ?? resultModel(event.props.output),
+      (await read($, spawnModels))[event.props.tool_use_id] ?? resultModel(event.props.output),
     );
     // The call's provider model is not one of the Agent schema's Claude aliases, and the
     // engine draws an input its schema rejects as a bare `Agent`: the label carries it.
@@ -112,14 +106,16 @@ export const register = (
   on(
     'ui.render',
     { component: 'UserMessage', props: { origin: { kind: 'task-notification' } } },
-    async (_$, event, next) => {
+    async ($, event, next) => {
       if (event.component !== 'UserMessage' || event.props.isExpanded) {
         return next(event);
       }
       const task = event.props.task;
+      const agents = await read($, agentModels);
+      const spawns = await read($, spawnModels);
       const label = workerLabel(
-        (task?.id ? agentModels.get(task.id) : undefined) ??
-          (task?.toolUseId ? spawnModels.get(task.toolUseId) : undefined),
+        (task?.id ? agents[task.id] : undefined) ??
+          (task?.toolUseId ? spawns[task.toolUseId] : undefined),
       );
       // A spawn's labelled description already names it in the notification's summary.
       if (!label || event.props.text.includes(label)) {

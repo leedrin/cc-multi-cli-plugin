@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { appendFile } from 'node:fs/promises';
+import { addBounded } from './bounded.ts';
 import type { MessagesResponse } from './messages.ts';
 import type { GatewayEvent } from './server.ts';
 import {
@@ -14,6 +15,7 @@ import {
 } from './usage-accounting.ts';
 
 const RECEIPT_SCHEMA_VERSION = 2;
+const MAX_REMEMBERED = 8192;
 
 type UsageMetadata = NonNullable<MessagesResponse['multi_usage']>;
 type InvocationEvent = GatewayEvent & {
@@ -372,7 +374,7 @@ export class ReceiptLedger {
       return;
     }
     if (event.requestId) {
-      retain(this.seenRequests, event.requestId);
+      addBounded(this.seenRequests, event.requestId, MAX_REMEMBERED);
     }
     this.start(event);
     const pending = this.pending.get(keyFor(event));
@@ -413,7 +415,7 @@ export class ReceiptLedger {
     }
     this.pending.delete(keyFor(ref));
     if (ref.invocationId) {
-      retain(this.completedKeys, dedup);
+      addBounded(this.completedKeys, dedup, MAX_REMEMBERED);
     }
     const snapshot = serializeState(pending.state);
     const receipt: WorkerUsageReceipt = {
@@ -467,15 +469,5 @@ export class ReceiptLedger {
 
   drain(): Promise<void> {
     return this.queue;
-  }
-}
-
-function retain(set: Set<string>, key: string) {
-  set.add(key);
-  if (set.size > 8192) {
-    const oldest = set.values().next().value;
-    if (oldest !== undefined) {
-      set.delete(oldest);
-    }
   }
 }

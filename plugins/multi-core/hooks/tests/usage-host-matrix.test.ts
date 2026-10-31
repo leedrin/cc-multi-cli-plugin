@@ -1,4 +1,4 @@
-import { expect, mock, test } from 'claude-code/testing';
+import { expect, mock, type TestBody, test } from 'claude-code/testing';
 
 // The terminal-host matrix as the engine sees it. A host differs in what `$.ui.open` answers
 // and in how wide its pane is; the bytes a terminal exchanges are out of reach of function
@@ -52,15 +52,16 @@ const dashboard = {
   ],
 };
 
-type Kit = Parameters<Parameters<typeof test>[1]>;
+type Kit = Parameters<TestBody>;
 
 function environment(on: Kit[1], open: Open, calls: { open: number }) {
+  mock.clock(on);
   mock.env(on, {
     MULTI_GATEWAY_TOKEN: 'secret',
     MULTI_MOD_GATEWAY_URL: 'http://127.0.0.1:4000',
   });
   on('session.id', () => ({ value: 'matrix' }));
-  on('ui.open', () => {
+  on('ui.open', (() => {
     calls.open++;
     if (open.kind === 'throws') {
       throw new Error('no surface');
@@ -69,7 +70,7 @@ function environment(on: Kit[1], open: Open, calls: { open: number }) {
       return { value: { isPlaced: false, reason: open.reason } };
     }
     return { value: open.kind === 'placed' ? { isPlaced: true } : undefined };
-  });
+  }) as never);
   on('ui.close', () => ({ value: undefined }));
   on('http.fetch', () => ({
     value: { ok: true, status: 200, headers: {}, text: JSON.stringify(dashboard) },
@@ -80,7 +81,7 @@ function environment(on: Kit[1], open: Open, calls: { open: number }) {
 let reference: string | undefined;
 
 async function usageText($: Kit[0]): Promise<string> {
-  const result = await $.command.run({ command: 'multi-usage', args: '--text' });
+  const result = await $.command.run({ command: 'multi-usage', args: '--text' } as never);
   return result.text ?? '';
 }
 
@@ -98,7 +99,7 @@ for (const { host, columns, open } of hosts) {
     }
     expect(text).toContain('prompt cache read ratio 80.0%');
 
-    const result = await $.command.run({ command: 'multi-usage', args: '' });
+    const result = await $.command.run({ command: 'multi-usage', args: '' } as never);
     expect(calls.open).toBe(1);
     if (open.kind === 'refused' || open.kind === 'throws') {
       // No pane: the same usage arrives as text, with the reason when the host gave one.
@@ -115,7 +116,7 @@ for (const { host, columns, open } of hosts) {
       surface: 'terminal',
       component: 'Pane',
       requestId: 'multi-usage',
-      props: { title: 'Multi usage', isFocused: true, bodyColumns: columns },
+      props: { title: 'Multi usage', isFocused: true, bodyColumns: columns } as never,
     });
     // Every provider is reachable, the page can be refreshed and closed without a keyboard.
     for (const provider of ['openai', 'cursor', 'zen', 'antigravity', 'grok']) {
@@ -127,7 +128,7 @@ for (const { host, columns, open } of hosts) {
     await pane.press({ key: 'provider:openai' });
     expect(await pane.find({ type: 'Button', text: '[OpenAI / Codex]' })).toBeTruthy();
     await pane.press({ key: 'action:close' });
-    await $.command.run({ command: 'multi-usage', args: '' });
+    await $.command.run({ command: 'multi-usage', args: '' } as never);
     expect(await pane.find({ type: 'Button', text: '[All]' })).toBeTruthy();
     // A pane that never got focus (the host's fault) costs nothing: the text is still there.
     expect(await usageText($)).toBe(text);

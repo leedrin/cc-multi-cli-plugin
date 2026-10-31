@@ -4,11 +4,6 @@ import os from 'node:os';
 import path from 'node:path';
 import type { TestContext } from 'node:test';
 import test from 'node:test';
-import { AgentCatalog } from '../../plugins/multi-core/src/gateway/agent-catalog.ts';
-import {
-  type ApprovalContext,
-  NativeApprovalBridge,
-} from '../../plugins/multi-core/src/gateway/approval.ts';
 import type { GatewayFetch } from '../../plugins/multi-core/src/gateway/fetch.ts';
 import type {
   MessagesRequest,
@@ -19,6 +14,18 @@ import type {
 } from '../../plugins/multi-core/src/gateway/messages.ts';
 import { PermissionModes } from '../../plugins/multi-core/src/gateway/mode-hook.ts';
 import { ReceiptLedger } from '../../plugins/multi-core/src/gateway/receipts.ts';
+import type {
+  ResponsesInputContent,
+  ResponsesInputItem,
+  ResponsesRequest,
+} from '../../plugins/multi-core/src/gateway/responses.ts';
+import {
+  forAnthropic,
+  fromResponses,
+  OPENAI_SIGNATURE_PREFIX,
+  readSse,
+  toResponses,
+} from '../../plugins/multi-core/src/gateway/responses.ts';
 import type { GatewayEvent, GatewayOptions } from '../../plugins/multi-core/src/gateway/server.ts';
 import { createNativeGateway } from '../../plugins/multi-core/src/gateway/server.ts';
 import { estimateInputTokens } from '../../plugins/multi-core/src/gateway/tokens.ts';
@@ -30,18 +37,10 @@ import {
 import { readCodexAuth } from '../../plugins/multi-openai/src/auth.ts';
 import { openaiInstructions } from '../../plugins/multi-openai/src/instructions.ts';
 import { MODELS, OPENAI_WORKER_EFFORT } from '../../plugins/multi-openai/src/models.ts';
-import type {
-  ResponsesInputContent,
-  ResponsesInputItem,
-  ResponsesRequest,
-} from '../../plugins/multi-openai/src/responses.ts';
-import {
-  forAnthropic,
-  fromResponses,
-  readSse,
-  toResponses,
-} from '../../plugins/multi-openai/src/responses.ts';
+import { ZEN_SIGNATURE_PREFIXES } from '../../plugins/multi-zen/src/chat.ts';
 import { removeTemporary } from '../temporary.ts';
+
+const FOREIGN_PREFIXES = [OPENAI_SIGNATURE_PREFIX, ...ZEN_SIGNATURE_PREFIXES];
 
 /** A test double for one OpenAI Responses SSE event; sent as JSON, never typed upstream. */
 interface SseEvent {
@@ -194,7 +193,7 @@ test('Responses stream preserves native tool arguments, usage and stop reason', 
   assert.deepEqual(call.input, { file_path: 'fixture' });
   assert.equal(result.usage.input_tokens, 60);
   assert.equal(result.usage.cache_read_input_tokens, 40);
-  assert.equal(sent.at(-1)?.type, 'message_stop');
+  assert.equal(sent.at(-1)?.type, 'content_block_stop');
   const partial = sent.flatMap(({ value }) =>
     'index' in value && 'delta' in value && value.delta.type === 'input_json_delta'
       ? [value.delta.partial_json]
@@ -263,7 +262,7 @@ test('images retain their order and tool-result association across provider swit
       { type: 'input_text', text: 'Capture timed out' },
     ],
   });
-  assert.equal(forAnthropic(request), request);
+  assert.equal(forAnthropic(request, FOREIGN_PREFIXES), request);
   assert.deepEqual(request, snapshot, 'Conversion must not rewrite the stored transcript');
 });
 
@@ -378,7 +377,7 @@ test('switching back to Claude removes OpenAI reasoning while preserving message
     },
   ];
   const mixed = { ...body, messages: stored };
-  const cleaned = forAnthropic(mixed).messages ?? [];
+  const cleaned = forAnthropic(mixed, FOREIGN_PREFIXES).messages ?? [];
   assert.equal(cleaned.length, 3);
   assert.deepEqual(cleaned[0], stored[0]);
   assert.deepEqual(cleaned[1].content, [tool]);
@@ -390,7 +389,11 @@ test('switching back to Claude removes OpenAI reasoning while preserving message
     2,
     'Stored transcript must not be mutated',
   );
-  assert.equal(forAnthropic(body), body, 'Unmixed Claude requests retain byte-exact passthrough');
+  assert.equal(
+    forAnthropic(body, FOREIGN_PREFIXES),
+    body,
+    'Unmixed Claude requests retain byte-exact passthrough',
+  );
 });
 
 test('fragmented SSE and truncated or failed responses never become successful completions', async () => {
@@ -617,7 +620,7 @@ test('OpenAI main and worker requests adapt instructions without losing runtime 
     seen.push(JSON.parse(String(options.body)));
     return new Response(sse(textEvents));
   });
-  for (const name of ['gpt-6-astra', 'gpt-6-sol', 'gpt-5.6-terra', 'gpt-6-luna']) {
+  for (const name of ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-luna']) {
     await (await call({ ...payload, model: `multi/openai/${name}` })).text();
   }
   await (await call(payload, { 'x-claude-code-agent-id': 'worker-a' })).text();
@@ -671,43 +674,6 @@ test('Claude prompts remain unchanged after OpenAI main and worker requests, inc
   }
   assert.equal(openaiCalls, 2);
   assert.equal(claudeCalls, 8);
-});
-
-test('catalog filtering reaches Claude and OpenAI without changing user text or native registration', async (t) => {
-  const row = '- hidden: Hidden worker (Tools: Read)';
-  const text = `<system-reminder>\nAvailable agent types for the Agent tool:\n${row}\n- custom: Keep this (Tools: Read)\n</system-reminder>`;
-  const seen: string[] = [];
-  const call = await gateway(
-    t,
-    async (url, options) => {
-      seen.push(String(options.body));
-      return url.includes('anthropic')
-        ? Response.json({ content: [] })
-        : new Response(sse(textEvents));
-    },
-    {
-      agentCatalog: new AgentCatalog(
-        { hidden: { model, description: 'Hidden worker', tools: ['Read'] } },
-        [],
-      ),
-    },
-  );
-  for (const choice of [model, 'claude-sonnet-5']) {
-    await (
-      await call({
-        model: choice,
-        messages: [
-          { role: 'user', content: text },
-          { role: 'user', content: row },
-        ],
-      })
-    ).text();
-  }
-  assert.equal(seen.length, 2);
-  for (const sent of seen) {
-    assert.equal(sent.split('Hidden worker').length - 1, 1);
-    assert(sent.includes('Keep this'));
-  }
 });
 
 test('external route isolates provider credentials and handles simultaneous worker identities', async (t) => {
@@ -783,7 +749,7 @@ test('all registered model and reasoning choices reach OpenAI without substituti
     return new Response(sse(textEvents));
   });
   assert.equal(OPENAI_WORKER_EFFORT, 'medium');
-  for (const slug of ['gpt-6-astra', 'gpt-6-sol', 'gpt-5.6-terra', 'gpt-6-luna']) {
+  for (const slug of ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-luna']) {
     assert(Object.values(MODELS).includes(slug), slug);
     for (const effort of ['low', 'medium', 'high', 'xhigh', 'max']) {
       const response = await call(
@@ -1049,8 +1015,6 @@ test('parallel calls with delayed names emit complete, sequential Claude blocks'
       'content_block_start',
       'content_block_delta',
       'content_block_stop',
-      'message_delta',
-      'message_stop',
     ],
   );
 });
@@ -1323,12 +1287,7 @@ const harnessReply = (model: string, text = 'native'): MessagesResponse => ({
 
 async function harnessPermissionModes(session = 'routing-session') {
   const modes = new PermissionModes(async () => ({}));
-  await modes.record({
-    hook_event_name: 'UserPromptSubmit',
-    session_id: session,
-    permission_mode: 'auto',
-    prompt: 'route',
-  });
+  modes.recordModSession(session, { permissionMode: 'auto' });
   return modes;
 }
 
@@ -1481,157 +1440,4 @@ test('provider routing sends each external model to one handler route', async (t
     );
     assert.deepEqual(touched, [row.hit], row.label);
   }
-});
-
-test('OpenAI streaming records tool memory from SSE observation, not rememberResult', async (t) => {
-  const streamSession = JSON.stringify({ session_id: 'stream-tool-session' });
-  const bufferedSession = JSON.stringify({ session_id: 'buffered-tool-session' });
-  const command = 'node stream-tool-memory.js';
-  const toolId = 'call_stream_tool_memory';
-  const toolItem: SseEvent = {
-    type: 'function_call',
-    call_id: toolId,
-    name: 'Bash',
-    arguments: JSON.stringify({ command }),
-  };
-  const upstream: GatewayFetch = async () => new Response(sse(events(toolItem)));
-  let reviews = 0;
-  const bridge = new NativeApprovalBridge(async () => {
-    reviews++;
-    return { outcome: 'allow', model: 'codex-auto-review' };
-  });
-  const call = await gateway(t, upstream, {
-    guardAuto: true,
-    approvalBridge: bridge,
-    blockAnthropic: true,
-  });
-  const inference = {
-    model,
-    metadata: { user_id: bufferedSession },
-    messages: [{ role: 'user', content: command }],
-    tools: [
-      {
-        name: 'Bash',
-        input_schema: { type: 'object', properties: { command: { type: 'string' } } },
-      },
-    ],
-  };
-  const classify = (streamed: boolean) =>
-    call(
-      {
-        model: 'claude-sonnet-5',
-        metadata: { user_id: streamed ? streamSession : bufferedSession },
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: '<transcript>\n' },
-              { type: 'text', text: `${JSON.stringify({ Bash: command })}\n` },
-              { type: 'text', text: '</transcript>\n' },
-              { type: 'text', text: 'Stage 1 does NOT apply user intent\n<severity>N</severity>' },
-            ],
-          },
-        ],
-      },
-      streamed ? { 'x-claude-code-agent-id': 'stream-worker' } : {},
-    );
-
-  const buffered = await call({ ...inference, stream: false });
-  assert.equal(buffered.status, 200);
-  const bufferedMessage = await readMessage(buffered);
-  const bufferedTool = bufferedMessage.content.find((block) => block.type === 'tool_use');
-  assert(bufferedTool?.type === 'tool_use');
-  assert.equal(bufferedTool.id, toolId);
-  assert.equal((await classify(false)).status, 200);
-  assert.equal(reviews, 1);
-
-  const worker = { 'x-claude-code-agent-id': 'stream-worker' };
-  const streamed = await call({ ...inference, stream: true }, worker);
-  assert.equal(streamed.status, 200);
-  assert.match(streamed.headers.get('content-type') ?? '', /event-stream/);
-  await streamed.text();
-  assert.equal((await classify(true)).status, 400);
-  assert.equal(reviews, 1);
-});
-
-test('plan mode binds OpenAI review and denies planned edits without review', async (t) => {
-  const session = 'plan-review-session';
-  const modes = new PermissionModes(async () => ({}));
-  const prompt = (mode: string) =>
-    modes.record({
-      hook_event_name: 'UserPromptSubmit',
-      session_id: session,
-      permission_mode: mode,
-      prompt: 'review',
-    });
-  const contexts: (ApprovalContext | undefined)[] = [];
-  const bridge = new NativeApprovalBridge(async (_input, _signal, context) => {
-    contexts.push(context);
-    return { outcome: 'allow', model: 'codex-auto-review' };
-  });
-  const call = await gateway(t, async () => new Response(sse(textEvents)), {
-    approvalBridge: bridge,
-    permissionModes: modes,
-  });
-  const metadata = { user_id: JSON.stringify({ session_id: session }) };
-  const classify = async (action: Record<string, unknown>) => {
-    const response = await call({
-      model: 'claude-sonnet-5',
-      metadata,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: '<transcript>\n' },
-            { type: 'text', text: `${JSON.stringify(action)}\n` },
-            { type: 'text', text: '</transcript>\n' },
-            { type: 'text', text: 'Stage 1 does NOT apply user intent\n<severity>N</severity>' },
-          ],
-        },
-      ],
-    });
-    assert.equal(response.status, 200);
-    return JSON.stringify(await response.json());
-  };
-  await prompt('plan');
-  const inference = await call({
-    model,
-    metadata,
-    stream: false,
-    messages: [{ role: 'user', content: 'plan' }],
-    tools: [{ name: 'Bash', input_schema: { type: 'object' } }],
-  });
-  assert.equal(inference.status, 200);
-  await inference.text();
-
-  assert.match(await classify({ Bash: 'node -p 1' }), /<severity>0</);
-  assert.equal(contexts.at(-1)?.planMode, true);
-  const denied = await classify({ Write: { file_path: 'edit.txt', content: 'edited' } });
-  assert.match(denied, /<severity>100</);
-  assert.match(denied, /multi-plan-mode/);
-  assert.equal(contexts.length, 1);
-
-  await prompt('auto');
-  await classify({ Write: { file_path: 'edit.txt', content: 'edited' } });
-  assert.equal(contexts.length, 2);
-  assert.equal(contexts.at(-1)?.planMode, undefined);
-  const safeguarded = await call({
-    model,
-    metadata,
-    stream: false,
-    messages: [{ role: 'user', content: 'plan from classifier context' }],
-    tools: [{ name: 'Bash', input_schema: { type: 'object' } }],
-    safeguards: [
-      {
-        type: 'dangerous_tool_use',
-        classifier_context: { permission_mode: 'plan' },
-      },
-    ],
-  });
-  assert.equal(safeguarded.status, 200);
-  await safeguarded.text();
-  await classify({ Bash: 'node -p 1' });
-  assert.equal(contexts.at(-1)?.requestPermissionMode, 'plan');
-  assert.equal(contexts.at(-1)?.planMode, true);
-  assert.throws(() => modes.planning('unknown-session'), /permission mode is unavailable/);
 });

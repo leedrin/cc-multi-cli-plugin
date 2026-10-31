@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  antigravityDefaultWorkerModel,
   antigravityPickerOptions,
   discoverAntigravityModels,
   parseAntigravityModels,
@@ -121,4 +122,19 @@ test('discovers Windows npm shims with injected platform and process execution',
     models.map(({ id }) => id),
     ['gemini-low'],
   );
+});
+
+test('the default worker model prefers Flash over Flash-Lite whatever order agy lists', () => {
+  const ids = ['gemini-3.8-flash-lite', 'gemini-3.8-flash'];
+  assert.equal(antigravityDefaultWorkerModel(ids), 'gemini-3.8-flash');
+  assert.equal(antigravityDefaultWorkerModel([...ids].reverse()), 'gemini-3.8-flash');
+  assert.equal(
+    antigravityDefaultWorkerModel(['gemini-3.8-flash', 'gemini-3.8-pro']),
+    'gemini-3.8-pro',
+  );
+});
+
+test('the default worker model moves to a new Gemini generation without a Pro suffix', () => {
+  const ids = ['gemini-3.8-flash', 'gemini-4-argon', 'gemini-3.8-pro'];
+  assert.equal(antigravityDefaultWorkerModel(ids), 'gemini-4-argon');
 });

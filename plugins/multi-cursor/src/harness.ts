@@ -11,6 +11,7 @@ import type {
   TokenUsage,
 } from '@cursor/sdk';
 import type { WorkerPermissions } from '../../multi-core/src/gateway/agent-definitions.ts';
+import { boundedWait } from '../../multi-core/src/gateway/harness-cli.ts';
 import {
   archiveHarnessReply,
   commitHarnessResponse,
@@ -45,25 +46,21 @@ import {
   HarnessSessionStore,
   type HarnessTurnLease,
   isHash,
-  isRecord,
   readJson,
   textContentBlock,
 } from '../../multi-core/src/gateway/harness-session.ts';
+import { mergePermissions } from '../../multi-core/src/gateway/harness-settings.ts';
 import type {
   Emit,
   MessagesRequest,
   MessagesResponse,
 } from '../../multi-core/src/gateway/messages.ts';
 import type { PermissionContext } from '../../multi-core/src/gateway/mode-hook.ts';
-import { dangerousToolMode } from '../../multi-core/src/gateway/safeguards.ts';
+import { isRecord } from '../../multi-core/src/gateway/record.ts';
 import { settleOrAbort } from '../../multi-core/src/gateway/settle.ts';
 import { CursorProviderError, cursorRunError } from './errors.ts';
 import { type CursorModelOption, cursorSelection } from './models.ts';
-import {
-  cursorNativePermissions,
-  cursorPermissionPolicy,
-  mergeCursorPermissions,
-} from './permissions.ts';
+import { cursorNativePermissions, cursorPermissionPolicy } from './permissions.ts';
 import { cursorContextNotice, observeCursorUpdate } from './progress.ts';
 import { prepareCursorRequest } from './request.ts';
 import { legacyCursorSessionFile, restoreCursorSession } from './session-record.ts';
@@ -76,7 +73,6 @@ type PendingRun = {
   model: string;
   effort?: string;
   inputTokens: number;
-  safeguarded?: boolean;
 };
 /**
  * The persisted half. Version 3 carries the shared `provider`/`identity` header.
@@ -396,7 +392,7 @@ export class CursorHarness {
     if (!context) {
       throw new Error('Cursor requires an explicit Claude permission context');
     }
-    const permissions = mergeCursorPermissions(context, await this.checkPermissions());
+    const permissions = mergePermissions(context, await this.checkPermissions());
     this.validate(body, permissions);
     this.cwd = await realpath(this.cwd);
     const key = hash([
@@ -459,7 +455,7 @@ export class CursorHarness {
     context: PermissionContext,
     observeProgress?: NativeProgressObserver,
   ): Promise<MessagesResponse> {
-    const lease = await this.takeTurn(scope);
+    const lease = await this.takeTurn(scope, exchange.controller.signal);
     const session = lease.session;
     try {
       if (session.saved.interrupted) {
@@ -469,6 +465,7 @@ export class CursorHarness {
         stateDirectory: this.stateDirectory,
         key,
         saved: session.saved,
+        platform: this.platform,
         emit,
         provider: 'Cursor',
         validContentBlock: cursorContentBlock,
@@ -523,18 +520,11 @@ export class CursorHarness {
       return undefined;
     }
     const events: HarnessEvent[] = [];
-    const response = new HarnessResponse(
-      pending.model,
-      pending.inputTokens,
-      (name, value) => {
-        events.push([name, structuredClone(value)]);
-      },
-      undefined,
-      { requested: pending.safeguarded === true },
-    );
+    const response = new HarnessResponse(pending.model, pending.inputTokens, (name, value) => {
+      events.push([name, structuredClone(value)]);
+    });
     response.text(result.result ?? '');
     const finished = response.finish(cursorUsage(result.usage), pending.model, pending.effort);
-    events.push(...response.takeTerminalEvents());
     return { response: finished, events };
   }
 
@@ -578,9 +568,9 @@ export class CursorHarness {
   }
 
   /** One turn at a time per agent: a prompt that arrives during a run is refused. */
-  private async takeTurn(scope: string): Promise<TurnLease> {
+  private async takeTurn(scope: string, signal: AbortSignal): Promise<TurnLease> {
     try {
-      return await this.store.acquireLease(this.identity(scope));
+      return await this.store.acquireLease(this.identity(scope), signal);
     } catch (error) {
       throw error instanceof HarnessBusyError ? new CursorProviderError(error) : error;
     }
@@ -661,9 +651,8 @@ export class CursorHarness {
     model: string,
     inputTokens: number,
     effort?: string,
-    safeguarded?: boolean,
   ) {
-    session.saved.pendingRun = { key, model, inputTokens, effort, safeguarded };
+    session.saved.pendingRun = { key, model, inputTokens, effort };
     // Durability write: a gateway crash before a terminal result arrives leaves
     // the session interrupted, so the next request resumes it with a notice
     // instead of guessing what the dispatched run did.
@@ -704,12 +693,7 @@ export class CursorHarness {
       if (session.saved.interrupted) {
         prepared.prompt.text = `${interruptedNotice('Cursor')}\n\n${prepared.prompt.text ?? ''}`;
       }
-      const stream = new HarnessResponse(
-        body.model ?? '',
-        prepared.inputTokens,
-        emit,
-        body.safeguards,
-      );
+      const stream = new HarnessResponse(body.model ?? '', prepared.inputTokens, emit);
       // Each finished SDK tool call becomes a display row in this reply, named
       // after Cursor's own tool; the terse summary is written when the run ends.
       const actions = new NativeActionTracker('Cursor', observeProgress, (block) =>
@@ -738,7 +722,6 @@ export class CursorHarness {
         selection.id,
         prepared.inputTokens,
         selectedEffort(selection),
-        dangerousToolMode(body.safeguards) !== undefined,
       );
       dispatched = true;
       signal.throwIfAborted();
@@ -777,11 +760,9 @@ export class CursorHarness {
       return await commitHarnessResponse({
         session,
         store: this.store,
-        response: stream,
         finished: response,
         exchange,
         key,
-        emit,
         update: (saved) => {
           saved.interrupted = false;
           saved.pendingRun = undefined;
@@ -864,7 +845,10 @@ export class CursorHarness {
         exchange.controller.abort(new Error('Cursor gateway closed'));
       }
     }
-    await bounded(Promise.allSettled(this.registry.all().map((exchange) => exchange.result)));
+    await boundedWait(
+      Promise.allSettled(this.registry.all().map((exchange) => exchange.result)),
+      1000,
+    );
     for (const session of [...this.store.sessions()]) {
       this.closeAgent(session.runtime.agent);
     }
@@ -880,7 +864,6 @@ function validPendingRun(pending: PendingRun | undefined) {
       typeof pending.model === 'string' &&
       Number.isSafeInteger(pending.inputTokens) &&
       pending.inputTokens >= 0 &&
-      (pending.safeguarded === undefined || typeof pending.safeguarded === 'boolean') &&
       (pending.runId === undefined ||
         (typeof pending.runId === 'string' && pending.runId.length > 0)))
   );
@@ -897,18 +880,4 @@ function savedAgentId(saved: unknown): string | undefined {
     return undefined;
   }
   return saved.agentId;
-}
-
-async function bounded(operation: Promise<unknown>) {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    await Promise.race([
-      operation,
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, 1000);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
 }

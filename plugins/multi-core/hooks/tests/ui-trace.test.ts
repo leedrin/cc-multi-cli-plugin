@@ -1,4 +1,4 @@
-﻿import { expect, mock, test } from 'claude-code/testing';
+﻿import { expect, mock, type TestBody, test } from 'claude-code/testing';
 
 const dashboard = {
   updatedAt: '2026-09-30T12:00:00Z',
@@ -16,10 +16,11 @@ const dashboard = {
 const SESSION = 'SESSION-SECRET-123';
 const TOKEN = 'token-xyz-789';
 
-type Kit = Parameters<Parameters<typeof test>[1]>;
+type Kit = Parameters<TestBody>;
 
 function setup(on: Kit[1], trace: string | undefined, open: unknown) {
   const lines: string[] = [];
+  mock.clock(on);
   mock.env(on, {
     MULTI_GATEWAY_TOKEN: TOKEN,
     MULTI_MOD_GATEWAY_URL: 'http://127.0.0.1:4000',
@@ -40,7 +41,7 @@ function setup(on: Kit[1], trace: string | undefined, open: unknown) {
 
 test('UI trace is silent unless MULTI_UI_TRACE is 1', async ($, on) => {
   const lines = setup(on, undefined, { isPlaced: true });
-  await $.command.run({ command: 'multi-usage', args: '' });
+  await $.command.run({ command: 'multi-usage', args: '' } as never);
   expect(lines).toEqual([]);
 });
 
@@ -49,7 +50,7 @@ test('UI trace records a refused placement with its reason', async ($, on) => {
     isPlaced: false,
     reason: 'terminal is narrower than 144 columns',
   });
-  await $.command.run({ command: 'multi-usage', args: '' });
+  await $.command.run({ command: 'multi-usage', args: '' } as never);
   const open = lines
     .map((line) => JSON.parse(line.replace(/^multi-usage /, '')))
     .find((line) => line.event === 'pane.open');
@@ -63,13 +64,13 @@ test('UI trace records a refused placement with its reason', async ($, on) => {
 
 test('UI trace records a placed pane, presses and the surface, and never identifies the session', async ($, on) => {
   const lines = setup(on, '1', { isPlaced: true });
-  await $.command.run({ command: 'multi-usage', args: '' });
+  await $.command.run({ command: 'multi-usage', args: '' } as never);
   const pane = await $.ui.mount({
     plugin: 'multi-core',
     surface: 'terminal',
     component: 'Pane',
     requestId: 'multi-usage',
-    props: { title: 'Multi usage', isFocused: true, bodyColumns: 80 },
+    props: { title: 'Multi usage', isFocused: true, bodyColumns: 80 } as never,
   });
   await pane.press({ key: 'provider:openai' });
   await pane.press({ key: 'action:refresh' });

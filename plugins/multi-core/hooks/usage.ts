@@ -1,5 +1,9 @@
 import type { EngineInterface, Register, UiOpenResult } from 'claude-code';
+import { atom, read, update } from 'claude-code';
+import type { MultiCoreUsagePaneState } from '../types/multi-core.d.ts';
+import { accepted, getJson, type Wire } from './gateway.ts';
 import { quotaAdvice } from './quota-advice.ts';
+import { rememberBounded, withBounded } from './state.ts';
 import {
   formatReceipts,
   parseDashboard,
@@ -17,22 +21,33 @@ import {
   type UsagePaneState,
 } from './usage-pane.ts';
 
-const panes = new Map<string, UsagePaneState>();
-const advisorySessions = new Set<string>();
+// Atoms are declared where they are read so the engine can discover each state key.
+const advisorySessions = atom(
+  { plugin: 'multi-core', key: 'advisorySessions' } as const,
+  [] as string[],
+);
+const usagePanes = atom(
+  { plugin: 'multi-core', key: 'usagePanes' } as const,
+  {} as Record<string, MultiCoreUsagePaneState>,
+);
+const modKeys = atom(
+  { plugin: 'multi-core', key: 'modKeys' } as const,
+  {} as Record<string, string>,
+);
+const usageTimeoutMs = 8500;
+// Layout measurements are only a memo between draws; navigation lives in $.state.
+const layouts = new Map<string, { columns: number; rows: number }>();
 
-export function forgetUsageSession(session: string) {
-  advisorySessions.delete(session);
-  panes.delete(session);
-}
+const wire = ($: EngineInterface): Wire => ({
+  url: () => $.env.get('MULTI_MOD_GATEWAY_URL'),
+  token: () => $.env.get('MULTI_GATEWAY_TOKEN'),
+  fetch: (url, init) => $.http.fetch(url, init),
+  sleep: (ms, signal) => $.clock.sleep(ms, { signal }),
+  keys: { read: () => read($, modKeys), save: (change) => update($, modKeys, change) },
+});
 
-export const register = (
-  on: Parameters<Register>[0],
-  _options?: Parameters<Register>[1],
-  agentModels: ReadonlyMap<string, string> = new Map(),
-) => {
+export const register = (on: Parameters<Register>[0], _options?: Parameters<Register>[1]) => {
   on('classic.PreToolUse', async ($, event, next) => {
-    await attributeToolCall($, event, agentModels);
-    // `Task` is the Agent tool's legacy name; a worker's own spawn carries its agentId.
     const tool: string = event.tool;
     if (
       (tool !== 'Agent' && tool !== 'Task') ||
@@ -41,15 +56,12 @@ export const register = (
       return next(event);
     }
     const session = await $.session.id();
-    if (!advisorySessions.has(session)) {
+    if (!(await read($, advisorySessions)).includes(session)) {
       return next(event);
     }
-    const snapshot = parseDashboard(
-      await request($, `/multi/mod/usage?sessionId=${encodeURIComponent(session)}&view=providers`),
-    );
+    const snapshot = parseDashboard(accepted(await fetchUsage($, session)));
     const result = await next(event);
-    // Preserve all permission decisions and tool arguments, including on lookup failure.
-    if (!advisorySessions.has(session)) {
+    if (!(await read($, advisorySessions)).includes(session)) {
       return result;
     }
     return {
@@ -64,40 +76,34 @@ export const register = (
       return { text: 'Use /multi-usage or /multi-usage --text.' };
     }
     const session = await $.session.id();
-    const response = parseDashboard(
-      await request($, `/multi/mod/usage?sessionId=${encodeURIComponent(session)}&view=providers`),
-    );
+    const response = parseDashboard(accepted(await fetchUsage($, session)));
     if (!response) {
       return { text: 'Multi usage is unavailable. Launch this session with claude-multi.' };
     }
     if (textOnly) {
       return { text: renderUsageText(response) };
     }
-    if (panes.size >= MAX_PANES) {
-      panes.clear();
-    }
-    panes.set(
-      session,
-      newPaneState({ ...response, quotaAdviceEnabled: advisorySessions.has(session) }),
+    const quotaAdviceEnabled = (await read($, advisorySessions)).includes(session);
+    layouts.delete(session);
+    await update($, usagePanes, (held) =>
+      withBounded(held, session, newPaneState({ ...response, quotaAdviceEnabled }), MAX_PANES),
     );
     const fallback = await openPane($, session, response);
-    if (fallback !== undefined) {
-      return { text: fallback };
-    }
-    $.ui.invalidate('ui.render');
-    return {};
+    return fallback === undefined ? {} : { text: fallback };
   });
   on('ui.render', { component: 'Pane' }, async ($, event, next) => {
     if (event.requestId !== PANE_ID || event.surface !== 'terminal') {
       return next(event);
     }
-    const state = panes.get(await $.session.id());
+    const session = await $.session.id();
+    const state = await paneState($, session);
     if (!state) {
       return next(event);
     }
-    const elements = await $.ui.resolve(event);
+    const elements = $.ui.resolve(event);
     state.columns = event.props.bodyColumns;
     state.rows = event.props.scroll?.bodyRows ?? state.rows;
+    rememberBounded(layouts, session, { columns: state.columns, rows: state.rows }, MAX_PANES);
     await uiTrace($, {
       event: 'ui.render',
       surface: event.surface,
@@ -106,7 +112,6 @@ export const register = (
     });
     return renderPane(elements, state);
   });
-  // The focus ring walks the tabs: where it lands is the provider shown.
   on('ui.focus', { component: 'Pane', requestId: PANE_ID }, async ($, event, next) => {
     const result = await next(event);
     await uiTrace($, {
@@ -115,7 +120,7 @@ export const register = (
       ...(event.element === undefined ? {} : { element: event.element }),
     });
     const session = await $.session.id();
-    const state = panes.get(session);
+    const state = await paneState($, session);
     const selection = state ? selectionOf(event.element, state.props) : undefined;
     if (state && selection !== undefined && selection !== state.selected && !result?.deny) {
       await selectTab($, session, state, selection);
@@ -130,7 +135,7 @@ export const register = (
       element: event.element,
     });
     const session = await $.session.id();
-    const state = panes.get(session);
+    const state = await paneState($, session);
     if (state) {
       await paneAction($, session, state, event.element);
     }
@@ -138,22 +143,58 @@ export const register = (
   });
   on('ui.scroll', { component: 'Pane', requestId: PANE_ID }, async ($, event, next) => {
     await uiTrace($, { event: 'ui.scroll', requestId: event.requestId, by: event.by });
-    const state = panes.get(await $.session.id());
+    const session = await $.session.id();
+    const state = await paneState($, session);
     if (state) {
       state.rows = event.bodyRows;
       state.offset = scrollPane(state, event.by);
-      $.ui.invalidate('ui.render');
+      await savePane($, session, state);
     }
     return next(event);
   });
   on('ui.close', { id: PANE_ID }, async ($, event, next) => {
     await uiTrace($, { event: 'ui.close', requestId: event.id });
-    panes.delete(await $.session.id());
+    await forgetPane($, await $.session.id());
     return next(event);
   });
 };
 
-/** What the usage pane may say about itself: where it is, what moved, what was pressed. */
+async function paneState($: EngineInterface, session: string): Promise<UsagePaneState | undefined> {
+  const state = (await read($, usagePanes))[session];
+  return state ? { ...state, ...layouts.get(session), props: { ...state.props } } : undefined;
+}
+
+function savePane($: EngineInterface, session: string, state: UsagePaneState) {
+  // A late refresh must not recreate a pane that has already been closed.
+  return update($, usagePanes, (held) =>
+    Object.hasOwn(held, session) ? withBounded(held, session, state, MAX_PANES) : held,
+  );
+}
+
+function forgetPane($: EngineInterface, session: string) {
+  layouts.delete(session);
+  return update($, usagePanes, (held) =>
+    Object.fromEntries(Object.entries(held).filter(([id]) => id !== session)),
+  );
+}
+
+function fetchUsage($: EngineInterface, session: string, refresh = false) {
+  const query: Record<string, string> = { sessionId: session, view: 'providers' };
+  if (refresh) {
+    query.refresh = 'true';
+  }
+  return getJson(wire($), '/multi/mod/usage', query, { timeoutMs: usageTimeoutMs });
+}
+
+function fetchReceipts($: EngineInterface, session: string) {
+  return getJson(
+    wire($),
+    '/multi/mod/receipts',
+    { sessionId: session },
+    { timeoutMs: usageTimeoutMs },
+  );
+}
+
 type UiTraceFields = {
   event: string;
   surface?: string;
@@ -168,12 +209,7 @@ type UiTraceFields = {
 
 const REASON_LIMIT = 200;
 
-/**
- * Writes one metadata line to the debug log when `MULTI_UI_TRACE=1`, and nothing otherwise.
- * The fields are a closed set: no session id, prompt, dashboard text, header or token can be
- * passed in, because the type has nowhere to put them. It stays in this file because the
- * hook compiler follows `$` only into functions declared here.
- */
+/** Only metadata enters the debug log; the gateway key and session id have no field here. */
 async function uiTrace($: EngineInterface, fields: UiTraceFields): Promise<void> {
   if ((await $.env.get('MULTI_UI_TRACE')) !== '1') {
     return;
@@ -185,12 +221,6 @@ async function uiTrace($: EngineInterface, fields: UiTraceFields): Promise<void>
   $.ui.log(`multi-usage ${JSON.stringify(line)}`, { to: 'debug' });
 }
 
-const receiptsRoute = (session: string) =>
-  `/multi/mod/receipts?sessionId=${encodeURIComponent(session)}`;
-const refreshRoute = (session: string) =>
-  `/multi/mod/usage?view=providers&refresh=true&sessionId=${encodeURIComponent(session)}`;
-
-/** Shows one tab; the receipts load the first time they are shown, and only then. */
 async function selectTab(
   $: EngineInterface,
   session: string,
@@ -202,28 +232,29 @@ async function selectTab(
   if (selected === 'receipts' && !state.receiptLoaded && !state.loading) {
     await loadReceipts($, session, state);
   }
-  $.ui.invalidate('ui.render');
+  await savePane($, session, state);
 }
 
 async function loadReceipts($: EngineInterface, session: string, state: UsagePaneState) {
   state.loading = true;
-  $.ui.invalidate('ui.render');
+  await savePane($, session, state);
   try {
-    state.props = updatePane(state.props, 'receipts', await request($, receiptsRoute(session)));
-    // A failed load keeps the earlier data and is tried again the next time the tab is shown.
+    state.props = updatePane(state.props, 'receipts', accepted(await fetchReceipts($, session)));
     state.receiptLoaded = state.props.error === undefined;
   } finally {
     state.loading = false;
   }
 }
 
-/** Refresh reloads what the page shows: the receipts, or the provider view from the gateway. */
 async function refreshPane($: EngineInterface, session: string, state: UsagePaneState) {
   const receipts = state.selected === 'receipts';
   state.loading = true;
+  await savePane($, session, state);
   try {
-    const response = await request($, receipts ? receiptsRoute(session) : refreshRoute(session));
-    state.props = updatePane(state.props, receipts ? 'receipts' : 'refresh', response);
+    const response = receipts
+      ? await fetchReceipts($, session)
+      : await fetchUsage($, session, true);
+    state.props = updatePane(state.props, receipts ? 'receipts' : 'refresh', accepted(response));
     if (receipts) {
       state.receiptLoaded = state.props.error === undefined;
     }
@@ -233,7 +264,7 @@ async function refreshPane($: EngineInterface, session: string, state: UsagePane
 }
 
 async function closePane($: EngineInterface, session: string) {
-  panes.delete(session);
+  await forgetPane($, session);
   try {
     await $.ui.close({ id: PANE_ID });
   } catch {
@@ -241,7 +272,6 @@ async function closePane($: EngineInterface, session: string) {
   }
 }
 
-/** Applies one pressed element of the pane; an element that is not one of ours is left alone. */
 async function paneAction(
   $: EngineInterface,
   session: string,
@@ -260,25 +290,19 @@ async function paneAction(
   if (element === 'action:refresh') {
     await refreshPane($, session, state);
   } else if (element === 'action:quota-advice') {
-    const enabled = !advisorySessions.has(session);
-    if (enabled) {
-      advisorySessions.add(session);
-    } else {
-      advisorySessions.delete(session);
-    }
+    const enabled = !(await read($, advisorySessions)).includes(session);
+    await update($, advisorySessions, (held) =>
+      enabled ? [...held, session] : held.filter((id) => id !== session),
+    );
     state.props = { ...state.props, quotaAdviceEnabled: enabled };
   } else if (element === 'action:page-up' || element === 'action:page-down') {
     state.offset = scrollPane(state, (element === 'action:page-up' ? -1 : 1) * pageLines(state));
   } else {
     return;
   }
-  $.ui.invalidate('ui.render');
+  await savePane($, session, state);
 }
-/**
- * Opens the pane. A host may place no pane, or throw; the same data is always readable as
- * text, which is returned instead. An older build returns nothing from `open`, which
- * counts as placed.
- */
+
 async function openPane(
   $: EngineInterface,
   session: string,
@@ -294,7 +318,7 @@ async function openPane(
       rows: 20,
     });
   } catch {
-    panes.delete(session);
+    await forgetPane($, session);
     await uiTrace($, { event: 'pane.open', requested: true, placed: false, reason: 'open failed' });
     return renderUsageText(response);
   }
@@ -307,15 +331,16 @@ async function openPane(
   if (opened?.isPlaced !== false) {
     return undefined;
   }
-  panes.delete(session);
-  try {
-    await $.ui.close({ id: 'multi-usage' });
-  } catch {
-    // The pane only waited undrawn; failing to close it loses nothing.
-  }
-  return `The usage pane could not be shown (${opened.reason}). Showing text instead.\n\n${renderUsageText(response)}`;
+  $.ui.toast(`Multi usage: ${opened.reason}`);
+  await closePane($, session);
+  return (
+    'The usage pane could not be shown (' +
+    opened.reason +
+    '). Showing text instead.\n\n' +
+    renderUsageText(response)
+  );
 }
-/** Props are plain data: a field without a value is left out, never set to undefined. */
+
 function updatePane(previous: UsagePaneProps, action: string, response: unknown): UsagePaneProps {
   const { error: _error, ...kept } = previous;
   if (action === 'refresh') {
@@ -335,71 +360,4 @@ function updatePane(previous: UsagePaneProps, action: string, response: unknown)
     return { ...previous, error: 'Could not load receipts.' };
   }
   return { ...kept, receiptLines: lines };
-}
-async function request($: EngineInterface, route: string): Promise<unknown> {
-  const base = await $.env.get('MULTI_MOD_GATEWAY_URL');
-  const token = await $.env.get('MULTI_GATEWAY_TOKEN');
-  if (!base || !token) {
-    return undefined;
-  }
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const result = await Promise.race([
-      $.http.fetch(`${base}${route}`, {
-        method: 'GET',
-        headers: { 'x-multi-gateway-token': token },
-      }),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('Usage timeout')), 8500);
-      }),
-    ]);
-    return result.ok ? JSON.parse(result.text) : undefined;
-  } catch {
-    return undefined;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/**
- * Reviewer attribution for a provider's tool call: the gateway learns the session, call,
- * and workspace it needs to match the reviewer request to it. A Claude loop's tool call
- * is Claude's own and costs no gateway call. The reply never decides the call.
- */
-async function attributeToolCall(
-  $: EngineInterface,
-  event: { tool: string; tool_use_id: string },
-  agentModels: ReadonlyMap<string, string>,
-) {
-  const agentId = (event as { agentId?: string }).agentId;
-  const model = agentId === undefined ? await $.session.model() : agentModels.get(agentId);
-  const base = await $.env.get('MULTI_MOD_GATEWAY_URL');
-  const token = await $.env.get('MULTI_GATEWAY_TOKEN');
-  if (!model?.startsWith('multi/') || !base || !token) {
-    return;
-  }
-  const mode = (event as { permission_mode?: unknown }).permission_mode;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      $.http.fetch(`${base}/multi/permission`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-multi-gateway-token': token },
-        body: JSON.stringify({
-          session_id: await $.session.id(),
-          tool_use_id: event.tool_use_id,
-          tool_name: event.tool,
-          cwd: await $.session.cwd(),
-          ...(typeof mode === 'string' ? { permission_mode: mode } : {}),
-        }),
-      }),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('Attribution timeout')), 1500);
-      }),
-    ]);
-  } catch {
-    // Attribution is best effort; Claude's own checks decide the call.
-  } finally {
-    clearTimeout(timer);
-  }
 }

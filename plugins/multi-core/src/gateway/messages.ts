@@ -1,5 +1,5 @@
-import type { SafeguardResults } from './safeguards.ts';
 import type { CanonicalTokenUsage, UsageSource } from './usage-accounting.ts';
+import type { SafeguardResults } from './verdicts.ts';
 
 // ---------------------------------------------------------------------------
 // Anthropic Messages, as Claude Code sends them. These arrive as untrusted JSON:
@@ -120,7 +120,6 @@ export interface MessagesResponse {
   stop_reason: StopReason | null;
   stop_sequence: string | null;
   usage: Usage;
-  safeguard_results?: SafeguardResults;
   /** Provider accounting metadata; estimates are never presented as billed usage. */
   multi_usage?: {
     source: UsageSource;
@@ -178,11 +177,16 @@ export type StreamEventName =
   | 'error';
 
 /** An Anthropic SSE event without its `type`; the gateway merges the two. */
-export type StreamEventBody =
+export type ContentEventBody =
   | { message: MessagesResponse }
   | { index: number; content_block: ResponseContentBlock }
   | { index: number; delta: BlockDelta }
   | { index: number }
+  | { error: { type: string; message: string } }
+  | Record<string, never>;
+
+export type StreamEventBody =
+  | ContentEventBody
   | {
       delta: {
         stop_reason: StopReason | null;
@@ -190,8 +194,15 @@ export type StreamEventBody =
         safeguard_results?: SafeguardResults;
       };
       usage: Usage;
-    }
-  | { error: { type: string; message: string } }
-  | Record<string, never>;
+    };
 
-export type Emit = (type: StreamEventName, value: StreamEventBody) => void;
+export type ContentEventName = Exclude<StreamEventName, 'message_delta' | 'message_stop'>;
+export type Emit = (type: ContentEventName, value: ContentEventBody) => void;
+export type TerminalEmit = (type: StreamEventName, value: StreamEventBody) => void;
+
+// Only the core finaliser constructs a served reply.
+declare const served: unique symbol;
+export type ServedReply = MessagesResponse & {
+  readonly [served]: true;
+  safeguard_results?: SafeguardResults;
+};

@@ -12,7 +12,7 @@ tmp_rp.txt
 /docs/ACP_TRANSPORT_BLUEPRINT.md
 
 # --- Tooling ---
-node_modules/
+node_modules
 
 # Agent scratch area: plans, specs, reverse-engineering notes. Local-only.
 /.agent/
@@ -30,3 +30,4 @@ report.*.json
 # Claude Code function-hook declarations, written per build by `/plugin-types`;
 # `npm run typecheck:mod` reads them. Regenerate after an update, never edit.
 /.claude/types/
+/.claude-plugin/types/

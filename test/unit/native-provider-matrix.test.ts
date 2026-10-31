@@ -140,12 +140,7 @@ async function startMatrix(
   }
   const completions: GatewayEvent[] = [];
   const modes = new PermissionModes(async () => ({}));
-  await modes.record({
-    hook_event_name: 'UserPromptSubmit',
-    session_id: SESSION,
-    permission_mode: 'auto',
-    prompt: 'route',
-  });
+  modes.recordModSession(SESSION, { permissionMode: 'auto', cwd: process.cwd() });
   const fetchImpl: GatewayFetch = async (url) => {
     if (url.includes('api.anthropic.com')) {
       hits.anthropic++;

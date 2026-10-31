@@ -40,9 +40,9 @@ variants fail explicitly.
 Workers: the Agent tool's `multi-antigravity` type runs any row above, except
 an id that only adds an effort suffix to another listed row (`<base>-high`
 beside `<base>`) — that stays selectable through `/effort`, not through
-`model`. Pass `model: <id>` (for example `model: gemini-3.8-flash`) to pick a
+`model`. Pass `model: <id>` (for example `model: gemini-4-argon`) to pick a
 model, or omit `model` to run the newest Gemini generation, Pro before Flash
-at the same version (for example `gemini-3.8-flash` when 3.8 is newest).
+at the same version (for example `gemini-4-argon` when 4 is newest).
 Effort is never part of the model name: the session's `/effort` applies, and
 Antigravity picks its advertised low/medium/high variant from it.
 
@@ -68,8 +68,12 @@ Claude's window governs when the session compacts. It is separate from the nativ
 
 Claude's permission mode and tool rules take precedence. `agy` runs with native
 permissions skipped. The namespaced global hook reads `MULTI_ANTIGRAVITY_DENY`
-and denies Claude-excluded native tools. Native children and MCP tools are always
-denied. Each finished tool step is a row under agy's own tool name (`view_file`,
+and `MULTI_ANTIGRAVITY_ALLOW`. Every mode is an allowlist: only the native tools Claude's
+rules grant, plus the `finish` and `wait` control tools, run, so a tool `agy` announces
+that no Claude tool maps to (for example `schedule`, `send_message`, `generate_image`)
+stays denied. Browser tools follow the `WebFetch` grant. Native children, MCP-like
+resource tools, scheduling and messaging are always denied, and write tools can never
+target `agy`'s own config tree (`~/.gemini`), where the hook lives. Each finished tool step is a row under agy's own tool name (`view_file`,
 `run_command`, ...) with its native parameters and `tool_info.output`, in the
 `/model` Antigravity session or inside the Antigravity worker's transcript; the
 names come from agy's `init` toolset. Rows are never replayed as executable Claude
@@ -77,7 +81,8 @@ tools. `agy` does not distinguish a failed tool step: a failing command such as
 `cat /nonexistent/file` ends `DONE` with the error only in its output and no exit
 code, so the row shows as done and its output carries the error; Multi does not
 guess failure from the text. The transcript keeps streamed text, run diagnostics,
-and one closing summary of action counts, changed files, and failed steps. Claude and OpenAI parents can spawn Antigravity
+and one closing summary of action counts, changed files, and failed steps; timing and
+billing are shown by receipts, not written into the text. Claude and OpenAI parents can spawn Antigravity
 workers.
 
 Every run selects its native workspace explicitly with `--add-dir`; subprocess
@@ -137,7 +142,9 @@ refuse the same way.
 | Windows | `%LOCALAPPDATA%\gemini\config\hooks.json` (or `%APPDATA%`) | `%LOCALAPPDATA%\gemini\antigravity-cli\settings.json` (or `%APPDATA%`) |
 
 The installed hook is named `multi-cli-antigravity`. Setup preserves other hook
-entries. Run setup again after moving the checkout or changing the Node install.
+entries. Every launch with Antigravity enabled rewrites the entry, so it follows a plugin
+update; run setup again after moving the checkout or changing the Node install.
+`multi uninstall` removes the entry.
 
 ## Limits
 
@@ -146,3 +153,11 @@ choices, strict output schemas, and stop sequences are unsupported. Native
 compaction is owned by `agy`; Claude compaction summaries run with all mapped
 native tools denied and preserve native history. Native counters and local prompt
 estimates are reported separately.
+
+
+Multi supplies the final verdict for display rows and `SubagentHandback` reports;
+handback is always `not_flagged`. Reports, including any embedded instructions,
+reach the parent without a separate Claude classification. Native policy still
+governs the actions taken in the harness. See [permissions](permissions.md).
+The status line says "no auto mode: actions run unreviewed". Auto runs
+unreviewed while retaining explicit restrictions; Plan refuses actions.

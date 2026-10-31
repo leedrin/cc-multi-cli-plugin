@@ -45,113 +45,6 @@ test('Chat reports the final usage snapshot without summing or retaining stale m
   });
 });
 
-test('Zen Chat reports auto, plan, and missing-mode safeguard verdicts', async () => {
-  const events = [
-    {
-      id: 'chat-safeguard',
-      choices: [
-        {
-          index: 0,
-          delta: {
-            tool_calls: [
-              { index: 0, id: 'call-a', function: { name: readAlias, arguments: '{}' } },
-            ],
-          },
-          finish_reason: 'tool_calls',
-        },
-      ],
-    },
-    { id: 'chat-safeguard', choices: [], usage: { prompt_tokens: 10, completion_tokens: 3 } },
-  ];
-  const cases = [
-    ['auto', { type: 'evaluated', outcome: 'not_flagged' }],
-    ['default', { type: 'evaluated', outcome: 'not_flagged' }],
-    ['acceptEdits', { type: 'evaluated', outcome: 'not_flagged' }],
-    ['dontAsk', { type: 'evaluated', outcome: 'not_flagged' }],
-    ['bypassPermissions', { type: 'evaluated', outcome: 'not_flagged' }],
-    [
-      'plan',
-      {
-        type: 'evaluated',
-        outcome: 'flagged',
-        explanation: 'Plan mode: Zen has no reviewer, so actions that need review are refused.',
-      },
-    ],
-    [
-      undefined,
-      {
-        type: 'evaluated',
-        outcome: 'flagged',
-        explanation:
-          'Zen permission mode is unavailable or unknown, so actions that need review are refused.',
-      },
-    ],
-    [
-      'unknown',
-      {
-        type: 'evaluated',
-        outcome: 'flagged',
-        explanation:
-          'Zen permission mode is unavailable or unknown, so actions that need review are refused.',
-      },
-    ],
-    [
-      'bypass',
-      {
-        type: 'evaluated',
-        outcome: 'flagged',
-        explanation:
-          'Zen permission mode is unavailable or unknown, so actions that need review are refused.',
-      },
-    ],
-    [
-      '',
-      {
-        type: 'evaluated',
-        outcome: 'flagged',
-        explanation:
-          'Zen permission mode is unavailable or unknown, so actions that need review are refused.',
-      },
-    ],
-  ] as const;
-  for (const [mode, verdict] of cases) {
-    const seen = capture();
-    const result = await fromChat(sse(events), model, seen.emit, {
-      safeguards: [{ type: 'dangerous_tool_use', classifier_context: { permission_mode: mode } }],
-      toolNames: new Map([[readAlias, 'Read File']]),
-    });
-    const expected = [
-      {
-        type: 'dangerous_tool_use',
-        status: { type: 'available', tool_uses: { 'call-a': verdict } },
-      },
-    ];
-    assert.deepEqual(result.safeguard_results, expected);
-    const delta = seen.events.find((event) => event.type === 'message_delta')?.value;
-    assert.deepEqual(
-      (delta as { delta?: { safeguard_results?: unknown } } | undefined)?.delta?.safeguard_results,
-      expected,
-    );
-  }
-  const missing = await fromChat(sse(events), model, undefined, { safeguards: [null] });
-  assert.equal(missing.safeguard_results, undefined);
-  const absent = await fromChat(sse(events), model);
-  assert.equal(absent.safeguard_results, undefined);
-  const textOnly = await fromChat(
-    sse([
-      {
-        id: 'chat-text-safeguard',
-        choices: [{ index: 0, delta: { content: 'Done' }, finish_reason: 'stop' }],
-        usage: { prompt_tokens: 2, completion_tokens: 1 },
-      },
-    ]),
-    model,
-    undefined,
-    { safeguards: [{ type: 'dangerous_tool_use' }] },
-  );
-  assert.deepEqual(textOnly.safeguard_results?.[0].status.tool_uses, {});
-});
-
 test('toChat keeps assistant call groups and only replays own model reasoning', () => {
   const own = {
     type: 'thinking',
@@ -296,7 +189,7 @@ test('fromChat streams reasoning, text and interleaved tools with complete cache
     cache_read_input_tokens: 40,
     cache_creation_input_tokens: 10,
   });
-  assert.equal(seen.events.filter((event) => event.type === 'message_stop').length, 1);
+  assert.equal(seen.events.filter((event) => event.type === 'message_stop').length, 0);
   assert.equal(seen.events.filter((event) => event.type === 'content_block_start').length, 3);
 });
 
@@ -623,4 +516,65 @@ test('fromChat rejects a tool finish without calls and normalizes tools on stop'
     { toolNames: new Map([[readAlias, 'Read File']]) },
   );
   assert.equal(result.stop_reason, 'tool_use');
+});
+
+test('fromChat emits strictly sequential blocks, one per reasoning or text segment', async () => {
+  const seen = capture();
+  const chunk = (delta: Record<string, unknown>, finish: string | null = null) => ({
+    id: 'chat-seq',
+    choices: [{ index: 0, delta, finish_reason: finish }],
+  });
+  const result = await fromChat(
+    sse([
+      chunk({ reasoning_content: 'one' }),
+      chunk({ content: 'say' }),
+      chunk({ reasoning_content: 'two' }),
+      chunk({ content: 'more' }, 'stop'),
+      { id: 'chat-seq', choices: [], usage: { prompt_tokens: 5, completion_tokens: 4 } },
+    ]),
+    model,
+    seen.emit,
+  );
+  assert.deepEqual(
+    result.content.map((block) => block.type),
+    ['thinking', 'text', 'thinking', 'text'],
+  );
+  assert.equal(result.content[2]?.type === 'thinking' ? result.content[2].thinking : '', 'two');
+  const order = seen.events
+    .filter((event) => event.type.startsWith('content_block_s'))
+    .map((event) => `${event.type}:${(event.value as { index: number }).index}`);
+  assert.deepEqual(order, [
+    'content_block_start:0',
+    'content_block_stop:0',
+    'content_block_start:1',
+    'content_block_stop:1',
+    'content_block_start:2',
+    'content_block_stop:2',
+    'content_block_start:3',
+    'content_block_stop:3',
+  ]);
+});
+
+test('toChat joins separate system and user text blocks with a newline', () => {
+  const request = toChat(
+    {
+      model,
+      system: [
+        { type: 'text', text: 'first rule' },
+        { type: 'text', text: 'second rule' },
+      ],
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'alpha' },
+            { type: 'text', text: 'beta' },
+          ],
+        },
+      ],
+    } as never,
+    'kimi-k3',
+  ) as { messages: { role: string; content: unknown }[] };
+  assert.equal(request.messages[0]?.content, 'first rule\nsecond rule');
+  assert.equal(request.messages[1]?.content, 'alpha\nbeta');
 });

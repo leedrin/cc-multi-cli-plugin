@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { mock } from 'node:test';
+import { fromResponses } from '../../plugins/multi-core/src/gateway/responses.ts';
 import { usageTrace } from '../../plugins/multi-core/src/gateway/usage-trace.ts';
-import { fromResponses } from '../../plugins/multi-openai/src/responses.ts';
 
 const provider = {
   source: 'provider',

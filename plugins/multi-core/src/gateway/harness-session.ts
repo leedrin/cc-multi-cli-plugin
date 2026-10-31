@@ -1,10 +1,13 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { atomicWriteFile } from './atomic-write.ts';
 import { isDisplayTool } from './display-rows.ts';
 import type { HarnessEvent } from './harness-exchange.ts';
+import { migrateHarnessSession } from './harness-migration.ts';
 import type { MessagesResponse } from './messages.ts';
+import { isRecord } from './record.ts';
 import { lockStateFile } from './state-lock.ts';
 
 /**
@@ -41,9 +44,14 @@ export type HarnessTurnLease<S extends HarnessSessionBase, R extends object = ob
 
 type OwnedSession = {
   busy: boolean;
+  /** The running turn: its cancellation signal, and when its lease is released. */
+  holder?: { signal?: AbortSignal; released: Promise<void> };
   releases: Array<() => Promise<void>>;
   unlock?: Promise<void>;
 };
+
+/** How long a new turn waits for a cancelled turn to finish recording its interruption. */
+const CANCELLED_TURN_WAIT_MS = 10000;
 
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
@@ -128,8 +136,14 @@ export class HarnessSessionStore<S extends HarnessSessionBase, R extends object 
     this.restore = options.restore;
   }
 
-  /** One turn at a time per agent: take the record and mark it busy, or refuse. */
-  async acquireLease(identity: string): Promise<HarnessTurnLease<S, R>> {
+  /**
+   * One turn at a time per agent: take the record and mark it busy, or refuse. A turn
+   * whose `signal` was aborted is already ending, so the next one waits for it to
+   * record its interruption (bounded) instead of being refused; that is not a queue.
+   */
+  async acquireLease(identity: string, signal?: AbortSignal): Promise<HarnessTurnLease<S, R>> {
+    this.assertOpen();
+    await this.cancelledTurnEnded(identity);
     this.assertOpen();
     const current = this.records.get(identity);
     if (current?.busy || this.loading.has(identity)) {
@@ -143,6 +157,8 @@ export class HarnessSessionStore<S extends HarnessSessionBase, R extends object 
       this.assertOpen();
       const owned = this.mustOwn(session);
       owned.busy = true;
+      const ended = Promise.withResolvers<void>();
+      owned.holder = { signal, released: ended.promise };
       let released = false;
       return {
         session,
@@ -152,6 +168,8 @@ export class HarnessSessionStore<S extends HarnessSessionBase, R extends object 
           }
           released = true;
           owned.busy = false;
+          owned.holder = undefined;
+          ended.resolve();
           if (this.closing) {
             await this.releaseLock(session);
             this.records.delete(identity);
@@ -160,6 +178,24 @@ export class HarnessSessionStore<S extends HarnessSessionBase, R extends object 
       };
     } finally {
       this.loading.delete(identity);
+    }
+  }
+
+  private async cancelledTurnEnded(identity: string): Promise<void> {
+    const current = this.records.get(identity);
+    const holder = current ? this.owned.get(current)?.holder : undefined;
+    if (!holder?.signal?.aborted) {
+      return;
+    }
+    let timer: NodeJS.Timeout | undefined;
+    const waited = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, CANCELLED_TURN_WAIT_MS);
+      timer.unref();
+    });
+    try {
+      await Promise.race([holder.released, waited]);
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -224,7 +260,7 @@ export class HarnessSessionStore<S extends HarnessSessionBase, R extends object 
       const restored = this.restore
         ? await this.restore({ identity, files, read: readJson })
         : { saved: await readJson(file) };
-      return this.validateSaved(restored.saved, identity)?.response;
+      return this.validateSaved(migrateHarnessSession(restored.saved), identity)?.response;
     } catch {
       return undefined;
     }
@@ -252,7 +288,11 @@ export class HarnessSessionStore<S extends HarnessSessionBase, R extends object 
         ? await this.restore({ identity, files: uniqueFiles, read: readJson })
         : { saved: await readJson(file) };
       this.assertOpen();
-      const selected = this.validateSaved(restored.saved, identity);
+      const migrated = migrateHarnessSession(restored.saved);
+      const selected = this.validateSaved(migrated, identity);
+      if (selected === undefined && restored.saved !== undefined) {
+        await preserveUnsupportedRecord(file, restored.saved);
+      }
       const saved = selected ?? this.fresh(identity);
       const owned: OwnedSession = { busy: false, releases };
       const session: HarnessSession<S, R> = {
@@ -265,7 +305,7 @@ export class HarnessSessionStore<S extends HarnessSessionBase, R extends object 
         },
       };
       this.owned.set(session, owned);
-      if (restored.migrated === true && selected !== undefined) {
+      if ((restored.migrated === true || migrated !== restored.saved) && selected !== undefined) {
         await this.save(session);
       }
       if (this.closing) {
@@ -289,7 +329,8 @@ export class HarnessSessionStore<S extends HarnessSessionBase, R extends object 
     }
     if (saved.version !== this.version) {
       // The native session is never deleted; an unknown record is ignored and a
-      // fresh session starts rather than refusing to load.
+      // fresh session starts rather than refusing to load. `load` copies the
+      // file aside first, because the fresh record's first save replaces it.
       return undefined;
     }
     if (
@@ -322,6 +363,24 @@ export class HarnessSessionStore<S extends HarnessSessionBase, R extends object 
   private assertOpen(): void {
     if (this.closing) {
       throw new Error(`${this.tag} session store is closed`);
+    }
+  }
+}
+
+/**
+ * A record this build cannot read is about to be replaced by a fresh one. Keep
+ * the original beside it, named for its version, so the native session link is
+ * not lost across a downgrade or upgrade. An earlier copy is never overwritten.
+ */
+async function preserveUnsupportedRecord(file: string, saved: unknown): Promise<void> {
+  const version = isRecord(saved) ? String(saved.version ?? 'unversioned') : 'unknown';
+  const label = version.replaceAll(/[^A-Za-z0-9._-]/g, '_').slice(0, 32);
+  try {
+    await copyFile(file, `${file}.unsupported-v${label}`, constants.COPYFILE_EXCL);
+  } catch (error) {
+    const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+    if (code !== 'EEXIST' && code !== 'ENOENT') {
+      throw error;
     }
   }
 }
@@ -363,10 +422,6 @@ export function isHash(value: unknown): value is string {
   return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 }
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 export function optionalCount(value: unknown): boolean {
   return value === undefined || (Number.isSafeInteger(value) && Number(value) >= 0);
 }
@@ -380,6 +435,7 @@ export function validMessagesResponse(
   }
   const response = value as Partial<MessagesResponse>;
   return (
+    value.safeguard_results === undefined &&
     typeof response.id === 'string' &&
     response.type === 'message' &&
     response.role === 'assistant' &&
@@ -440,8 +496,6 @@ function validEvent(value: unknown): value is HarnessEvent {
       'content_block_start',
       'content_block_delta',
       'content_block_stop',
-      'message_delta',
-      'message_stop',
       'ping',
       'error',
     ].includes(name) &&

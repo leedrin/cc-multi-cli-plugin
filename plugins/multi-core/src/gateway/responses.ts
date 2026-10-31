@@ -1,23 +1,14 @@
 import { isDeepStrictEqual } from 'node:util';
-import {
-  type NormalizedContent,
-  normalizeConversation,
-  textContent,
-} from '../../multi-core/src/gateway/conversation.ts';
-import { isDirectToolAvailable } from '../../multi-core/src/gateway/direct-tools.ts';
+import { type NormalizedContent, normalizeConversation, textContent } from './conversation.ts';
+import { isDirectToolAvailable } from './direct-tools.ts';
 import type {
   Emit,
   MessagesRequest,
   MessagesResponse,
   ResponseContentBlock,
   StopReason,
-} from '../../multi-core/src/gateway/messages.ts';
-import {
-  type SafeguardProvider,
-  safeguardResults,
-} from '../../multi-core/src/gateway/safeguards.ts';
-import { callId, toolName } from '../../multi-core/src/gateway/tools.ts';
-import { usageTrace } from '../../multi-core/src/gateway/usage-trace.ts';
+} from './messages.ts';
+import { isRecord } from './record.ts';
 import {
   isOpenAIResponsesUsage,
   type OpenAIResponsesUsage,
@@ -25,9 +16,13 @@ import {
   parseOpenAIResponseUsage,
   responseUsageMetadata,
 } from './response-usage.ts';
+import { callId, toolName } from './tools.ts';
+import { usageTrace } from './usage-trace.ts';
+import { type RememberWorkerModel, stripWorkerModel } from './worker-models.ts';
 
 // Anthropic Messages <-> OpenAI Responses, for native Claude Code workers.
-const SIGNATURE_PREFIX = 'multi-openai:';
+/** Signature prefix OpenAI reasoning state carries; other providers pass their own. */
+export const OPENAI_SIGNATURE_PREFIX = 'multi-openai:';
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 
 export type Effort = (typeof EFFORTS)[number];
@@ -117,10 +112,6 @@ interface ReasoningState {
 }
 
 // Boundary guards: JSON.parse and the provider stream hand us `unknown`.
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 function isOutputItem(value: unknown, done: boolean): value is ResponsesOutputItem {
   if (
     !isRecord(value) ||
@@ -237,8 +228,12 @@ function isEffort(value: string): value is Effort {
   return (EFFORTS as readonly string[]).includes(value);
 }
 
-// Only rewrite Claude-bound history when it contains our provider's opaque state.
-export function forAnthropic(body: MessagesRequest): MessagesRequest {
+// Only rewrite Claude-bound history when it contains a provider's opaque state;
+// the caller supplies every provider signature prefix to strip.
+export function forAnthropic(
+  body: MessagesRequest,
+  foreignPrefixes: readonly string[],
+): MessagesRequest {
   let changed = false;
   const messages = body.messages
     ?.map((message) => {
@@ -248,9 +243,7 @@ export function forAnthropic(body: MessagesRequest): MessagesRequest {
       const content = message.content.filter((block) => {
         const foreign =
           block.type === 'thinking' &&
-          [SIGNATURE_PREFIX, 'multi-zen-responses:', 'multi-zen-chat:'].some((prefix) =>
-            block.signature?.startsWith(prefix),
-          );
+          foreignPrefixes.some((prefix) => block.signature?.startsWith(prefix));
         changed ||= Boolean(foreign);
         return !foreign;
       });
@@ -412,7 +405,7 @@ function decodeReasoning(signaturePrefix: string) {
 export function toResponses(
   body: MessagesRequest,
   model: string,
-  signaturePrefix = SIGNATURE_PREFIX,
+  signaturePrefix = OPENAI_SIGNATURE_PREFIX,
 ): ResponsesRequest {
   validateRequestOptions(body);
   const format = outputFormat(body);
@@ -567,8 +560,7 @@ function outputValue(item: ResponsesOutputItem): unknown {
 }
 
 export interface ResponseOptions {
-  safeguards?: unknown;
-  safeguardProvider?: SafeguardProvider;
+  rememberWorkerModel?: RememberWorkerModel;
   toolNames?: ReadonlyMap<string, string>;
   stopSequences?: readonly string[];
   signaturePrefix?: string;
@@ -584,6 +576,8 @@ class ResponseStream {
   private message?: MessagesResponse;
   private cursor = 0;
   private stopped: string | null = null;
+  /** A stop sequence ended the content; the terminal event is awaited only for usage. */
+  stopPending = false;
   completed = false;
   private terminal = 'response.completed';
   private model: string;
@@ -620,11 +614,21 @@ class ResponseStream {
         if (!this.message) {
           throw new Error('OpenAI stream omitted response.created');
         }
+        if (this.stopPending) {
+          return;
+        }
         this.update(event);
         this.drain();
         if (this.stopped) {
-          this.finish('stop_sequence');
+          this.stopPending = true;
         }
+    }
+  }
+
+  /** The terminal event never came in time; the answer is complete but its usage is unknown. */
+  finishWithoutUsage() {
+    if (this.stopPending && !this.completed) {
+      this.finish('stop_sequence');
     }
   }
 
@@ -656,29 +660,12 @@ class ResponseStream {
     message.usage = openAIProtocolUsage(canonical);
     message.multi_usage = responseUsageMetadata(canonical, this.model);
     usageTrace({
-      provider: this.options.safeguardProvider ?? 'openai',
+      provider: this.model.startsWith('multi/zen/') ? 'zen' : 'openai',
       event: this.terminal,
       usage: canonical,
     });
     message.stop_reason = stopReason;
     message.stop_sequence = this.stopped;
-    const safeguard_results = safeguardResults(
-      this.options.safeguards,
-      message.content,
-      this.options.safeguardProvider ?? 'openai',
-    );
-    if (safeguard_results) {
-      message.safeguard_results = safeguard_results;
-    }
-    this.emit('message_delta', {
-      delta: {
-        stop_reason: stopReason,
-        stop_sequence: this.stopped,
-        ...(safeguard_results === undefined ? {} : { safeguard_results }),
-      },
-      usage: message.usage,
-    });
-    this.emit('message_stop', {});
     this.completed = true;
   }
 
@@ -688,6 +675,11 @@ class ResponseStream {
       { type: 'response.completed' | 'response.incomplete' | 'response.done' }
     >,
   ) {
+    if (this.stopPending) {
+      this.start(event.response);
+      this.finish('stop_sequence', event.response.usage);
+      return;
+    }
     if (
       this.options.requireUsage &&
       (event.response.usage?.input_tokens === undefined ||
@@ -697,16 +689,7 @@ class ResponseStream {
     }
     this.terminal = event.type;
     this.start(event.response);
-    if (event.response.status && !['completed', 'incomplete'].includes(event.response.status)) {
-      throw new Error(`OpenAI terminal response has status ${event.response.status}`);
-    }
-    const incomplete =
-      event.type === 'response.incomplete' || event.response.status === 'incomplete';
-    if (incomplete && event.response.incomplete_details?.reason !== 'max_output_tokens') {
-      throw new Error(
-        `OpenAI response incomplete: ${event.response.incomplete_details?.reason ?? 'unknown'}`,
-      );
-    }
+    const incomplete = this.terminalIncomplete(event);
     this.reconcile(event.response.output);
     if ([...this.slots.values()].some((slot) => !slot.done)) {
       throw new Error('OpenAI completed with an unfinished content block');
@@ -726,6 +709,26 @@ class ResponseStream {
       stopReason = 'max_tokens';
     }
     this.finish(stopReason, event.response.usage);
+  }
+
+  /** Whether the terminal event is a max-output cut-off; any other failed state throws. */
+  private terminalIncomplete(
+    event: Extract<
+      ResponseStreamEvent,
+      { type: 'response.completed' | 'response.incomplete' | 'response.done' }
+    >,
+  ): boolean {
+    if (event.response.status && !['completed', 'incomplete'].includes(event.response.status)) {
+      throw new Error(`OpenAI terminal response has status ${event.response.status}`);
+    }
+    const incomplete =
+      event.type === 'response.incomplete' || event.response.status === 'incomplete';
+    if (incomplete && event.response.incomplete_details?.reason !== 'max_output_tokens') {
+      throw new Error(
+        `OpenAI response incomplete: ${event.response.incomplete_details?.reason ?? 'unknown'}`,
+      );
+    }
+    return incomplete;
   }
 
   private reconcile(output?: ResponsesOutputItem[]) {
@@ -835,7 +838,9 @@ class ResponseStream {
     if (this.content.some((block) => block.type === 'tool_use' && block.id === id)) {
       throw new Error('OpenAI repeated a tool call ID');
     }
-    return { type: 'tool_use', id, name, input };
+    const block = { type: 'tool_use' as const, id, name, input };
+    stripWorkerModel(block, this.options.rememberWorkerModel ?? (() => {}));
+    return block;
   }
 
   private beginBlock(slot: OutputSlot) {
@@ -905,7 +910,7 @@ class ResponseStream {
         throw new Error('OpenAI omitted encrypted reasoning state');
       }
       block.signature =
-        (this.options.signaturePrefix ?? SIGNATURE_PREFIX) +
+        (this.options.signaturePrefix ?? OPENAI_SIGNATURE_PREFIX) +
         Buffer.from(JSON.stringify(slot.item)).toString('base64url');
       this.emit('content_block_delta', {
         index,
@@ -948,6 +953,9 @@ export function prefixSafeLength(text: string, stops: readonly string[]): number
   return limit;
 }
 
+/** How long a stream that already hit a stop sequence may take to report its usage. */
+const STOP_USAGE_WAIT_MS = 5000;
+
 export async function fromResponses(
   stream: AsyncIterable<Uint8Array>,
   model: string,
@@ -955,14 +963,36 @@ export async function fromResponses(
   options: ResponseOptions = {},
 ): Promise<MessagesResponse> {
   const response = new ResponseStream(model, emit, options);
-  for await (const event of readSse(stream)) {
-    if (!isStreamEvent(event)) {
-      continue;
+  const events = readSse(stream)[Symbol.asyncIterator]();
+  let deadline: Promise<'late'> | undefined;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    while (!response.completed) {
+      const next = events.next();
+      const step = deadline ? await Promise.race([next, deadline]) : await next;
+      if (step === 'late') {
+        response.finishWithoutUsage();
+        break;
+      }
+      if (step.done) {
+        break;
+      }
+      if (!isStreamEvent(step.value)) {
+        continue;
+      }
+      response.accept(step.value);
+      if (response.stopPending && !deadline) {
+        // The text is final, but the provider bills the whole response: keep reading to its usage.
+        deadline = new Promise<'late'>((resolve) => {
+          timer = setTimeout(() => resolve('late'), STOP_USAGE_WAIT_MS);
+        });
+      }
     }
-    response.accept(event);
-    if (response.completed) {
-      break;
-    }
+  } finally {
+    clearTimeout(timer);
+    // A stream abandoned early is released without waiting on its next chunk.
+    events.return?.(undefined).catch(() => undefined);
   }
+  response.finishWithoutUsage();
   return response.result();
 }

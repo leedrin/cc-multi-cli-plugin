@@ -44,6 +44,7 @@ const env = {
 };
 
 test('layers: a healthy host renders, places, focuses and opens the chosen tab', async ($, on) => {
+  mock.clock(on);
   mock.env(on, env);
   on('session.id', () => ({ value: 'layers-healthy' }));
   let opened: UiOpenResult | undefined;
@@ -53,24 +54,29 @@ test('layers: a healthy host renders, places, focuses and opens the chosen tab',
   });
   const focused: string[] = [];
   on('ui.focus', (_$, event) => {
-    focused.push(event.key);
-    return { value: undefined };
+    focused.push(event.element ?? '');
+    return {};
   });
   on('http.fetch', () => ({
     value: { ok: true, status: 200, headers: {}, text: JSON.stringify(dashboard) },
   }));
-  const result = await $.command.run({ command: 'multi-usage', args: '' });
+  const result = await $.command.run({ command: 'multi-usage', args: '' } as never);
   expect(result.text).toBeUndefined();
   const pane = await $.ui.mount({
     plugin: 'multi-core',
     surface: 'terminal',
     component: 'Pane',
     requestId: 'multi-usage',
-    props: { title: 'Multi usage', isFocused: true, bodyColumns: 80 },
+    props: { title: 'Multi usage', isFocused: true, bodyColumns: 80 } as never,
   });
   const selected = await pane.find({ type: 'Button', text: '[All]' });
   expect(selected?.key).toBe('tab:all');
-  await $.ui.focus({ requestId: 'multi-usage', key: 'tab:all' });
+  await $.ui.focus({
+    component: 'Pane',
+    requestId: 'multi-usage',
+    element: 'tab:all',
+    origin: { kind: 'person' },
+  });
   await pane.press({ key: 'provider:openai' });
   const moved = await pane.find({ type: 'Button', text: '[OpenAI]' });
   const layers: Layers = {
@@ -94,6 +100,7 @@ test('layers: a healthy host renders, places, focuses and opens the chosen tab',
 });
 
 test('layers: a refused placement falls back to text and closes the waiting pane', async ($, on) => {
+  mock.clock(on);
   mock.env(on, env);
   on('session.id', () => ({ value: 'layers-placement' }));
   on('ui.open', () => ({
@@ -107,7 +114,7 @@ test('layers: a refused placement falls back to text and closes the waiting pane
   on('http.fetch', () => ({
     value: { ok: true, status: 200, headers: {}, text: JSON.stringify(dashboard) },
   }));
-  const result = await $.command.run({ command: 'multi-usage', args: '' });
+  const result = await $.command.run({ command: 'multi-usage', args: '' } as never);
   expect(result.text).toContain('terminal is narrower than 144 columns');
   expect(result.text).toContain('OpenAI [ready]');
   expect(result.text).toContain('Cursor [ready]');
@@ -124,15 +131,16 @@ test('layers: a refused placement falls back to text and closes the waiting pane
   ).toBe('placement');
 });
 test('layers: a session without gateway data never reaches a pane', async ($, on) => {
+  mock.clock(on);
   mock.env(on, env);
   on('session.id', () => ({ value: 'layers-render' }));
   let opens = 0;
   on('ui.open', () => {
     opens++;
-    return { value: undefined };
+    return { value: { isPlaced: true as const } };
   });
   on('http.fetch', () => ({ value: { ok: false, status: 503, headers: {}, text: '' } }));
-  const result = await $.command.run({ command: 'multi-usage', args: '' });
+  const result = await $.command.run({ command: 'multi-usage', args: '' } as never);
   expect(result.text).toContain('unavailable');
   expect(opens).toBe(0);
   expect(
@@ -148,24 +156,25 @@ test('layers: a session without gateway data never reaches a pane', async ($, on
 });
 
 test('layers: a placed, rendered pane that receives no focus event is a focus failure', async ($, on) => {
+  mock.clock(on);
   mock.env(on, env);
   on('session.id', () => ({ value: 'layers-focus' }));
   on('ui.open', () => ({ value: { isPlaced: true } }));
   const focused: string[] = [];
   on('ui.focus', (_$, event) => {
-    focused.push(event.key);
-    return { value: undefined };
+    focused.push(event.element ?? '');
+    return {};
   });
   on('http.fetch', () => ({
     value: { ok: true, status: 200, headers: {}, text: JSON.stringify(dashboard) },
   }));
-  await $.command.run({ command: 'multi-usage', args: '' });
+  await $.command.run({ command: 'multi-usage', args: '' } as never);
   const pane = await $.ui.mount({
     plugin: 'multi-core',
     surface: 'terminal',
     component: 'Pane',
     requestId: 'multi-usage',
-    props: { title: 'Multi usage', isFocused: true, bodyColumns: 80 },
+    props: { title: 'Multi usage', isFocused: true, bodyColumns: 80 } as never,
   });
   const selected = await pane.find({ type: 'Button', text: '[All]' });
   const layers: Layers = {
@@ -185,26 +194,32 @@ test('layers: a placed, rendered pane that receives no focus event is a focus fa
 });
 
 test('layers: a control that is not a tab leaves the pane where it was', async ($, on) => {
+  mock.clock(on);
   mock.env(on, env);
   on('session.id', () => ({ value: 'layers-key' }));
   on('ui.open', () => ({ value: { isPlaced: true } }));
   let focusEvents = 0;
   on('ui.focus', () => {
     focusEvents++;
-    return { value: undefined };
+    return {};
   });
   on('http.fetch', () => ({
     value: { ok: true, status: 200, headers: {}, text: JSON.stringify(dashboard) },
   }));
-  await $.command.run({ command: 'multi-usage', args: '' });
+  await $.command.run({ command: 'multi-usage', args: '' } as never);
   const pane = await $.ui.mount({
     plugin: 'multi-core',
     surface: 'terminal',
     component: 'Pane',
     requestId: 'multi-usage',
-    props: { title: 'Multi usage', isFocused: true, bodyColumns: 80 },
+    props: { title: 'Multi usage', isFocused: true, bodyColumns: 80 } as never,
   });
-  await $.ui.focus({ requestId: 'multi-usage', key: 'tab:all' });
+  await $.ui.focus({
+    component: 'Pane',
+    requestId: 'multi-usage',
+    element: 'tab:all',
+    origin: { kind: 'person' },
+  });
   // A press on a control that is not a tab leaves the selection where it was.
   await pane.press({ key: 'action:quota-advice' });
   const stillAll = await pane.find({ type: 'Button', text: '[All]' });

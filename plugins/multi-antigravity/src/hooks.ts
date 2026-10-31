@@ -1,11 +1,13 @@
 import { mkdir, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { atomicWriteFile } from '../../multi-core/src/gateway/atomic-write.ts';
-import { hookCommand } from '../../multi-core/src/gateway/permission-hook.ts';
 import { lockStateFile } from '../../multi-core/src/gateway/state-lock.ts';
 
 const namespace = 'multi-cli-antigravity';
+/** Long enough for a concurrent launch's read and atomic rewrite of the hook file. */
+const hookLockWaitMs = 5000;
 
 export interface AntigravityPathOptions {
   platform?: NodeJS.Platform;
@@ -85,7 +87,8 @@ export async function installAntigravityHook(
   options: AntigravityPathOptions = {},
 ): Promise<void> {
   await mkdir(path.dirname(file), { recursive: true });
-  const unlock = await lockStateFile(`${file}.multi-lock`);
+  // Every launch reinstalls the hook, so a concurrent launch holds this briefly.
+  const unlock = await lockStateFile(`${file}.multi-lock`, { waitMs: hookLockWaitMs });
   try {
     const hooks = await readHooks(file);
     const platform = options.platform ?? process.platform;
@@ -124,4 +127,18 @@ function assertAntigravityHooks(hooks: Record<string, unknown>, platform: NodeJS
       'Antigravity requires its native permission hook. Run the launcher with --antigravity-setup.',
     );
   }
+}
+
+export function hookCommand(file: URL, platform: NodeJS.Platform = process.platform): string {
+  return [process.execPath, fileURLToPath(file)]
+    .map((value) => {
+      if (platform !== 'win32') {
+        return `'${value.replaceAll("'", "'\\''")}'`;
+      }
+      if (/["%\r\n!]/.test(value)) {
+        throw new Error('Unsupported characters in hook path');
+      }
+      return `"${value}"`;
+    })
+    .join(' ');
 }

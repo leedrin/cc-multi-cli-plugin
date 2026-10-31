@@ -1,8 +1,5 @@
-import { type MessagesResponse, toProtocolUsage } from '../../multi-core/src/gateway/messages.ts';
-import {
-  type CanonicalTokenUsage,
-  cacheReadRatio,
-} from '../../multi-core/src/gateway/usage-accounting.ts';
+import { type MessagesResponse, toProtocolUsage } from './messages.ts';
+import { type CanonicalTokenUsage, cacheReadRatio } from './usage-accounting.ts';
 
 /**
  * The usage object of a Responses API terminal event. Every field may be absent and
