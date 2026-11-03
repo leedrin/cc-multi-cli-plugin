@@ -3,9 +3,11 @@
 > 项目：`greenpolo/cc-multi-cli-plugin` Fork  
 > 文档类型：Architecture PRD + Technical Design  
 > 建议分支：`feature/multi-provider-v2`  
-> 状态：Draft v1.0  
+> 状态：Draft v1.1  
 > 日期：2026-09-30  
 > 目标读者：Codex、Claude Code、项目维护者、Reviewer
+
+修订记录：v1.1（2026-11-03），按 DD §23 合入 R1–R31；R25 为工作流条目，不涉及 PRD 正文。
 
 ---
 
@@ -362,7 +364,7 @@ local.ollama
 文件：
 
 ```text
-plugins/multi-core/src/providers/model-identity.ts
+plugins/multi-core/src/gateway/model-identity.ts
 ```
 
 接口：
@@ -389,11 +391,13 @@ export interface ModelIdentity {
 }
 ```
 
-推荐 route format：
+路由语法：
 
 ```text
-multi/<provider>/<url-encoded-model-id>
+multi/<provider>/<encoded-model-id>[/<cursor-params>][[1m]]
 ```
+
+`<provider>` 必须匹配 `^[a-z0-9][a-z0-9._-]{0,63}$`，并保留 `core`（`multi-core` 是插件名，不能作为 worker）；`<encoded-model-id>` 是 `encodeURIComponent(modelId)`。完整语法为 `multi/<provider>/<encoded-model-id>[/<cursor-params>][[1m]]`：Cursor 预设参数只用于 Cursor，保留在编码段之外；`[1m]` 也位于编码之外。`decode(encode(provider, model))` 必须恒等，反向编码不要求对带原始字符的 Cursor 预设恒等。已保存的 OpenAI、Zen、Cursor 路由解析结果保持兼容。凡解析路由的位置统一使用 `decodeModelRoute`，不得直接 `split('/')`；`byProvider` 用 `identity.preset !== undefined` 识别预设，不能以解码后的 `/` 判断。
 
 例如：
 
@@ -443,7 +447,7 @@ multi/zen/kimi-k3
 文件：
 
 ```text
-plugins/multi-core/src/providers/model-descriptor.ts
+plugins/multi-core/src/gateway/model-descriptor.ts
 ```
 
 接口：
@@ -529,7 +533,7 @@ Provider-specific data remains provider-owned.
 文件：
 
 ```text
-plugins/multi-core/src/providers/provider.ts
+plugins/multi-core/src/gateway/provider.ts
 ```
 
 接口：
@@ -567,7 +571,7 @@ export interface ProviderDescriptor {
 
   usage?: ProviderUsageReader;
 
-  review?: ProviderReviewCapability;
+  autoReview: AutoReviewPolicy;
 
   direct?: DirectProviderAdapter;
 
@@ -598,7 +602,7 @@ provider.kind === 'harness'
 文件：
 
 ```text
-plugins/multi-core/src/providers/registry.ts
+plugins/multi-core/src/gateway/registry.ts
 ```
 
 接口：
@@ -656,7 +660,7 @@ Provider discovery 不应该散落在 `launcher.ts`。
 新增：
 
 ```text
-plugins/multi-core/src/providers/runtime.ts
+plugins/multi-core/src/gateway/runtime.ts
 ```
 
 ```ts
@@ -702,7 +706,7 @@ ProviderRuntime
 文件：
 
 ```text
-plugins/multi-core/src/providers/direct.ts
+plugins/multi-core/src/gateway/direct.ts
 ```
 
 建议接口：
@@ -789,7 +793,7 @@ export interface DirectProviderAdapter {
 文件：
 
 ```text
-plugins/multi-core/src/providers/credentials.ts
+plugins/multi-core/src/gateway/credentials.ts
 ```
 
 ```ts
@@ -820,12 +824,11 @@ export interface CredentialResolver {
 
 规则：
 
-1. Credential 不进入 model metadata
-2. Credential 不进入 Mods payload
-3. Credential 不进入 receipt
-4. Credential 不写 trace
-5. Credential 不进入 Claude child process
-6. Provider runtime dispose 后不得保留不必要 secret
+1. 仅由已启用 Provider 的 registry descriptor 声明 credential env；不从模型名推断
+2. Credential 不进入 model metadata、Mods payload、receipt、trace 或错误消息
+3. 在创建任何子进程之前，从 `process.env` 取出并删除已启用 Provider 的凭据；仅过滤 Claude child env 不足以隔离其他 harness 子进程
+4. Provider runtime dispose 后不得保留不必要 secret
+5. Pi 首批凭据只从明确指定的环境变量读入内存，不读取 `auth.json` / `models.json`，不执行 `!command`
 
 ---
 
@@ -849,6 +852,7 @@ return handleOpenAI(...);
 const resolved = runtime.resolveModel(externalModel);
 
 if (!resolved) {
+  // Includes unknown provider and unknown model routes; never fall back to OpenAI.
   throw new BadRequest('Unknown provider model');
 }
 
@@ -1256,10 +1260,11 @@ Pi display name   → label
 context window    → contextWindow
 output limit      → maxOutputTokens
 vision            → capabilities.images
-tool use          → capabilities.tools
 reasoning         → reasoning
-pricing           → pricing
+pricing           → pricing (catalog display only; not accounting)
 ```
+
+Pi 的 Model 不提供可靠的工具能力字段。`capabilities.tools` 由 Multi 维护的 curated model catalog 明确声明，不从 Pi 元数据推测。Pi backend 只暴露白名单内、`type` 为聊天类且 `api === 'openai-completions'` 的模型。
 
 无法可靠确定的 capability：
 
@@ -1275,27 +1280,23 @@ pricing           → pricing
 
 # 23. Pi AI Adapter 执行模式
 
-推荐两种实现阶段。
-
-## Mode A：使用 Pi AI transport，但 Claude 保留 tool loop
+只实现一种模式：Pi AI 提供 transport 与事件归一化，工具执行仍由 Claude Code tool loop 负责。
 
 ```text
 Claude tool schema
       ↓
-Pi AI
+Pi AI Direct adapter
       ↓
 Provider model
       ↓
-tool call
-      ↓
-Pi AI event/result normalization
+Pi events / result
       ↓
 Multi MessagesResponse
       ↓
 Claude Code executes tool
 ```
 
-这是首选。
+Adapter 不执行或模拟工具，不发送 `message_delta` / `message_stop` 等终止事件；由 server 按统一收尾路径发出。流按连续 text/thinking delta 分段生成 Anthropic 内容块，不将 Pi 的 start/end 事件一一映射；thinking 签名在块结束时发出，若 `thinking_end` 改变已发送签名则显式失败。`toolcall_end` 前缓冲工具调用，检查 `argumentsError`，再还原工具别名并一次性发送完整调用；解析失败不得发送 `tool_use`。回放相邻同模型 thinking 块时合并。停止原因映射为 `stop → end_turn`、`length → max_tokens`、`toolUse → tool_use`；`error`、`aborted` 走失败/中止路径，`pending`、`deferred` 显式失败。`tool_choice` 支持 auto/none、any→required、指定工具名→别名；未声明的指定工具返回 `BadRequest`。请求输入支持 user text、仅在模型声明支持 image input 时接受的 base64 image，以及映射为 Pi `toolResult` 的 `tool_result`；`document` 和其他不支持的 Claude 专有输入块返回 `BadRequest`。assistant 内容块仅支持 text、thinking、tool_use，其他专有 assistant 块显式拒绝，不静默转换。Pi 的归一化 `Usage` 会把缺失计数写为 0；usage 必须通过 `onProviderStreamEvent` 观察 Pi 处理前的原始 chunk，不得从归一化 Usage 反推缺失字段，并按 §45 映射至 Canonical usage。
 
 ---
 
@@ -1357,15 +1358,11 @@ Pi 支持：
 - ambient cloud credentials
 - models.json/custom endpoint
 
-第一阶段建议：
+第一阶段仅使用 `@earendil-works/pi-ai`（Pi AI）的 provider/model discovery；凭据只从各 Provider 明确指定的环境变量读取，在内存中传给 adapter，并保留真实 provider identity 与来源。Multi 不复制 secret，也不读取 `~/.pi/agent/auth.json`、`models.json` 或 cwd 下配置。
 
-```text
-Pi 自己拥有 credential discovery
-```
+`@earendil-works/pi-coding-agent` 的 ModelRuntime 会读取 `auth.json`，且认证配置可含有解析时执行的 `!command`；这会引入命令执行及凭据来源不透明风险，因此 ModelRuntime、文件认证和 `!command` 不属于首批范围。
 
-Multi 不复制 secret。
-
-但必须明确：
+必须明确：
 
 ```text
 Provider credential lifetime
@@ -1373,7 +1370,7 @@ Provider identity
 Credential source
 ```
 
-不要让：
+不要让:
 
 ```text
 OpenRouter credential
@@ -1530,9 +1527,11 @@ interface PiHarnessSaved
     modelId: string;
   };
 
-  usage?: PiUsageSnapshot;
+  usage?: CanonicalTokenUsage;
 }
 ```
+
+`usage` 只复用 Multi 的 Canonical token usage；不另建 Pi usage shape，目录 `pricing` / 成本估算不进入 accounting。
 
 不要把：
 
@@ -1551,7 +1550,9 @@ tool object
 
 # 31. Pi permission policy
 
-这是 Pi Harness 的最高风险模块。
+这是 Pi Harness 的最高风险模块，属于后置项：只有用户明确要求 Pi 自己作为 agent 后才能启动。开工前必须决定 Pi 无沙箱时如何处理工作区边界；cwd 本身不是安全边界，选项为接受并明确说明，或要求 OS 沙箱。MCP、子代理、配置/扩展隔离、会话路径及重试/压缩计费也须先定方案。
+
+未来实现必须显式支持 `plan`、`normal`、`auto`、`bypass`：没有 reviewer 的 `auto` 必须明确告知动作未经审查；`bypass` 不得放宽 managed deny 或 workspace policy，也不意味着批准任意 Pi 原生工具。未识别或无法可靠分类的工具一律 fail closed。下列映射只是待定约束，不是首批交付要求。
 
 文件：
 
@@ -1564,6 +1565,7 @@ export interface PiPermissionPolicy {
   mode:
     | 'plan'
     | 'normal'
+    | 'auto'
     | 'bypass';
 
   allowedTools?: readonly string[];
@@ -1610,17 +1612,9 @@ fail closed
 
 ---
 
-## Bypass
+## Auto / Bypass
 
-可以放宽 Provider 自己的 interactive approval，但：
-
-```text
-显式 deny
-managed policy
-workspace restriction
-```
-
-仍然必须生效。
+`auto` 在没有 provider reviewer 时运行未审查动作，必须向用户说明。`bypass` 不得放宽显式 deny 或 managed policy；工作区边界在 Pi 无沙箱的前提下尚未解决，不能声称仅靠 cwd 限制了访问范围。
 
 ---
 
@@ -1956,9 +1950,9 @@ export default ProviderDescriptor;
 plugins/
   multi-core/
     src/
-      providers/
+      gateway/
         provider.ts
-        registry.ts
+        provider-registry.ts
         runtime.ts
         model-descriptor.ts
         model-identity.ts
@@ -1966,7 +1960,6 @@ plugins/
         credentials.ts
         errors.ts
 
-      gateway/
         server.ts
         direct-provider.ts
         native-provider.ts
@@ -2109,39 +2102,11 @@ safe message
 
 # 45. Usage contract
 
-统一：
+沿用 Multi 的 `CanonicalTokenUsage` 与现有 accounting contract，不另建 `ProviderUsage` 或 Pi 专属 usage shape。Pi adapter 通过 `onProviderStreamEvent` 观察 Pi 处理前的原始 chunk（包括 `chunk.usage` 或 `chunk.choices[0].usage`），只保留数字字段且观察器不得抛错；不从 Pi 已归一化、会把缺失字段写为 0 的 `Usage` 反推缺失值。
 
-```ts
-export interface ProviderUsage {
-  source:
-    | 'provider'
-    | 'estimated'
-    | 'unavailable';
+将原始字段映射到 Canonical：prompt（扣除缓存）→ `inputTokens`；completion → `outputTokens`；缓存命中/写入 → 对应 cache 字段；reasoning → `reasoningTokens`；total → `totalTokens`。缺少字段保持 undefined；全流无 usage 时 `source: 'unavailable'` 且不因此判请求失败。沿用现有 OpenAI usage 解析对部分缺失字段的 `source` 规则。每次 direct 请求恰好一次上游调用，`modelCalls: 1`。
 
-  inputTokens?: number;
-  outputTokens?: number;
-
-  cacheReadTokens?: number;
-  cacheWriteTokens?: number;
-
-  reasoningTokens?: number;
-
-  cost?: {
-    amount: number;
-    currency: string;
-  };
-}
-```
-
-Provider 自己负责：
-
-```text
-billing interpretation
-quota
-pricing
-```
-
-Core 不根据 model 名计算账单归属。
+`pricing` 仅用于目录展示；provider cost 和模型目录价格不进入 token accounting，Canonical 不增加 `cost` 字段。配额和账单解释仍由 Provider 自己负责，Core 不根据 model 名计算账单归属。
 
 ---
 
@@ -2149,33 +2114,7 @@ Core 不根据 model 名计算账单归属。
 
 # 46. Review capability
 
-当前 OpenAI 有 provider reviewer。
-
-建议：
-
-```ts
-export type ProviderReviewCapability =
-  | {
-      kind: 'none';
-    }
-  | {
-      kind: 'claude';
-    }
-  | {
-      kind: 'provider';
-      createReviewer(
-        context: ProviderReviewContext
-      ): Promise<NativeApprovalBridge>;
-    };
-```
-
-禁止：
-
-```text
-Provider A 借 Provider B reviewer
-```
-
-保留当前安全 contract。
+以仓库现有 `Reviewer` 接口与 `AutoReviewPolicy` 为起点，不新增 `ProviderReviewCapability` 或 `NativeApprovalBridge` 抽象。Provider 描述自身的 auto-review policy；reviewer 由对应 Provider 创建并由 runtime 持有。OpenAI 的 reviewer 仍归 OpenAI 所有，其他 Provider 不得借用它。无 reviewer 的 Provider 在 `auto` 模式下不执行自动审查，必须明确告知动作未经审查；`plan` 模式仍拒绝动作。
 
 ---
 
@@ -2599,7 +2538,7 @@ existing tests unchanged
 provider routing characterization test
 ```
 
-确保每个 `multi/<provider>/<model>` 只路由一次。
+确保每个 `multi/<provider>/<model>` 只路由一次。未知 `multi/<provider>/...` 路由返回 `BadRequest`，不得回落到 OpenAI；这是相对当前行为的破坏性变更。
 
 ---
 
@@ -2626,34 +2565,23 @@ error
 新增：
 
 ```text
-providers/model-identity.ts
+plugins/multi-core/src/gateway/model-identity.ts
 ```
 
 实现：
 
 ```text
-ProviderId validation
-encodeModelRoute
-decodeModelRoute
+ProviderId validation: ^[a-z0-9][a-z0-9._-]{0,63}$；保留 core
+encodeModelRoute / decodeModelRoute
 ```
+
+路由采用 `multi/<provider>/<encoded-model-id>[/<cursor-params>][[1m]]` 分层语法；模型 ID 用 `encodeURIComponent` 编码。
 
 ---
 
 ### MP-0102
 
-修改 worker catalog：
-
-禁止直接：
-
-```ts
-split('/')
-```
-
-统一：
-
-```ts
-decodeModelRoute()
-```
+所有路由解析位置统一使用 `decodeModelRoute()`，禁止直接按 `/` 拆分路由，包括 `core/launcher.ts`、`gw/server.ts`、`plugins/multi-cursor/src/models.ts`、`plugins/multi-zen/src/chat.ts`、`plugins/multi-zen/src/request.ts`、`hooks/worker-rows.ts` 与 worker catalog。`byProvider` 用 `identity.preset !== undefined` 判断 Cursor 预设，不能根据解码后模型 ID 是否含 `/` 判断。
 
 ---
 
@@ -2667,7 +2595,7 @@ Acceptance：
 multi/openrouter/anthropic%2Fclaude-test
 ```
 
-可成为 worker model。
+解码后 `modelId` 为 `anthropic/claude-test`，可成为 worker model。编解码单测必须覆盖嵌套 ID；Claude Code 对 `%2F` 的端到端行为不阻塞首批里程碑，推迟到首个带 `/` 的 Provider 接入时验证。
 
 ---
 
@@ -2727,8 +2655,8 @@ Acceptance：
 增加：
 
 ```text
-providers/direct.ts
-gateway/direct-provider.ts
+plugins/multi-core/src/gateway/direct.ts
+plugins/multi-core/src/gateway/direct-provider.ts
 ```
 
 ---
@@ -2883,13 +2811,7 @@ OpenAI Responses
 
 ### MP-0601
 
-添加依赖：
-
-```text
-@earendil-works/pi-ai
-```
-
-锁定兼容版本。
+仅添加并精确锁定 `@earendil-works/pi-ai`，用于 Direct adapter 的 provider/model discovery 与调用。首批不引入 `@earendil-works/pi-coding-agent` / ModelRuntime，不读 Pi `auth.json`、`models.json` 或执行其中的 `!command`；凭据从明确列出的 Provider 环境变量读取。
 
 ---
 
@@ -2915,22 +2837,7 @@ Pi model → ModelDescriptor
 
 ### MP-0604
 
-实现：
-
-```text
-PiAI DirectProviderAdapter
-```
-
-必须支持：
-
-```text
-text
-stream
-reasoning
-tool use
-usage
-abort
-```
+实现 Pi AI `DirectProviderAdapter`，由 Pi 提供 transport/event normalization，Claude Code 保留 tool loop。除 text、stream、reasoning、tool use、usage、abort 外，还必须：以 delta 类型管理 Anthropic block 生命周期并在结束时发 thinking signature；做签名往返及模型身份校验；映射 stop reason；缓冲 tool call、校验 `argumentsError` 并经别名往返；实现 `tool_choice` 映射与未声明工具拒绝；拒绝不支持的 Claude block 和 `pending`/`deferred` stopReason；流后错误走失败路径。Pi 的归一化 `Usage` 会把缺失计数写为 0，必须通过 `onProviderStreamEvent` 观察 Pi 处理前的原始 chunk，并按 §45 映射到 Canonical usage，不得从归一化 Usage 反推缺失字段。请求输入接受 user text、仅当模型声明支持 image input 时接受的 base64 image、以及映射为 Pi `toolResult` 的 `tool_result`；`document` 和其他不支持的 Claude 专有输入块返回 `BadRequest`。assistant 内容块仅支持 text、thinking、tool_use，其他专有 assistant 块显式拒绝。Adapter 返回 `MessagesResponse`，不发送 message terminal 事件；只由 server 统一收尾。
 
 ---
 
@@ -2953,13 +2860,9 @@ Groq
 
 ### MP-0606
 
-实现 Pi auth integration。
+实现由 registry descriptor 驱动的 Pi credential integration：只读取已启用 Provider 明确声明的环境变量，将凭据仅传入 adapter 内存，并在任何子进程创建前从 `process.env` 删除这些凭据，保护 Claude 与其他 harness 子进程环境。未启用的 Provider 凭据保持原样。不读取 `auth.json` / `models.json`，不执行 `!command`。
 
-Acceptance：
-
-```text
-credential 不复制进 Claude child env
-```
+Acceptance：凭据不进入 Claude 或其他 harness 子进程 env、model metadata、Mod payload、receipt、trace、错误消息；环境回退不能改变请求。Pi NativeHarness 原生工具相关隔离是后置，不属于此阶段。
 
 ---
 
@@ -3208,10 +3111,10 @@ Requirements:
    - grok
 
 2. Add:
-   plugins/multi-core/src/providers/model-identity.ts
-   plugins/multi-core/src/providers/model-descriptor.ts
-   plugins/multi-core/src/providers/provider.ts
-   plugins/multi-core/src/providers/registry.ts
+   plugins/multi-core/src/gateway/model-identity.ts
+   plugins/multi-core/src/gateway/model-descriptor.ts
+   plugins/multi-core/src/gateway/provider.ts
+   plugins/multi-core/src/gateway/registry.ts
 
 3. Replace hard-coded provider parsing in worker-catalog with ModelIdentity
    helpers.
