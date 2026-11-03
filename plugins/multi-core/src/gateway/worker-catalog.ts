@@ -6,6 +6,8 @@
  * request's effort (the session's /effort) applies, validated by the provider.
  */
 
+import { decodeModelRoute } from './model-identity.ts';
+
 const WORKER_PROVIDERS = ['openai', 'zen', 'cursor', 'antigravity', 'grok'] as const;
 export type WorkerProvider = (typeof WORKER_PROVIDERS)[number];
 
@@ -63,21 +65,19 @@ function providerLabel(provider: WorkerProvider): string {
   return PROVIDER_LABELS[provider];
 }
 
-/** `multi/<provider>/<id>` split into its provider and its decoded, untagged id. */
-function parseProviderModel(model: string): { provider: WorkerProvider; id: string } | undefined {
-  const match = /^multi\/([a-z]+)\/(.+)$/.exec(model);
-  const provider = WORKER_PROVIDERS.find((name) => name === match?.[1]);
-  if (!match || !provider) {
+/** `multi/<provider>/<id>` decoded by the shared model-route codec. */
+export function parseProviderModel(
+  model: string,
+): { provider: string; id: string; preset?: string } | undefined {
+  const identity = decodeModelRoute(model);
+  if (!identity) {
     return undefined;
   }
-  const raw = match[2].replace(/\[1m\]$/i, '');
-  let id: string;
-  try {
-    id = decodeURIComponent(raw);
-  } catch {
-    id = raw;
-  }
-  return { provider, id };
+  return {
+    provider: identity.providerId,
+    id: identity.modelId,
+    ...(identity.preset !== undefined ? { preset: identity.preset } : {}),
+  };
 }
 
 /**
@@ -115,14 +115,15 @@ function byProvider(rows: readonly { model: string }[]): Map<WorkerProvider, Wor
   const grouped = new Map<WorkerProvider, WorkerModel[]>();
   for (const { model } of rows) {
     const parsed = parseProviderModel(model);
-    if (!parsed || parsed.id.includes('/')) {
+    const provider = WORKER_PROVIDERS.find((name) => name === parsed?.provider);
+    if (!parsed || parsed.preset !== undefined || !provider) {
       continue;
     }
-    const models = grouped.get(parsed.provider) ?? [];
+    const models = grouped.get(provider) ?? [];
     if (!models.some((entry) => entry.id === parsed.id)) {
       models.push({ id: parsed.id, model });
     }
-    grouped.set(parsed.provider, models);
+    grouped.set(provider, models);
   }
   return grouped;
 }
@@ -161,9 +162,11 @@ function owner(catalog: WorkerCatalog, id: string, except: string): ProviderWork
 function refusal(catalog: WorkerCatalog, worker: ProviderWorker, requested: string): string {
   const parsed = parseProviderModel(requested);
   if (parsed && parsed.provider !== worker.provider) {
-    const other = catalog[workerType(parsed.provider)];
+    const knownProvider = WORKER_PROVIDERS.find((provider) => provider === parsed.provider);
+    const other = knownProvider ? catalog[workerType(knownProvider)] : undefined;
+    const providerName = knownProvider ? providerLabel(knownProvider) : parsed.provider;
     const hint = other ? ` Use ${other.type} for it.` : '';
-    return `${worker.type} runs ${worker.label} models only; ${requested} belongs to ${providerLabel(parsed.provider)}.${hint} ${available(worker)}`;
+    return `${worker.type} runs ${worker.label} models only; ${requested} belongs to ${providerName}.${hint} ${available(worker)}`;
   }
   const id = parsed?.id ?? requested;
   if (CLAUDE_ALIASES.has(id.toLowerCase())) {
@@ -195,9 +198,9 @@ export function resolveWorker(
   const wanted = requested?.trim() || worker.defaultId;
   const parsed = parseProviderModel(wanted);
   const entry =
-    parsed?.provider === worker.provider || !parsed
-      ? find(worker, parsed?.id ?? wanted)
-      : undefined;
+    parsed && (parsed.provider !== worker.provider || parsed.preset !== undefined)
+      ? undefined
+      : find(worker, parsed?.id ?? wanted);
   if (!entry) {
     throw new Error(refusal(catalog, worker, wanted));
   }

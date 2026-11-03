@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { antigravityDefaultWorkerModel } from '../../plugins/multi-antigravity/src/models.ts';
-import { resolveWorker } from '../../plugins/multi-core/src/gateway/worker-catalog.ts';
+import {
+  buildWorkerCatalog,
+  parseProviderModel,
+  resolveWorker,
+} from '../../plugins/multi-core/src/gateway/worker-catalog.ts';
 import { workerCatalog, workerDefinitions } from '../../plugins/multi-core/src/launcher.ts';
 
 const rows = [
@@ -103,6 +107,30 @@ test('no model runs the provider default: the newest or native default, not the 
   assert.equal(antigravityDefaultWorkerModel(['claude-opus']), undefined);
 });
 
+test('worker routes preserve encoded nested ids and exclude Cursor presets', () => {
+  const workerCatalog = buildWorkerCatalog([
+    { model: 'multi/openai/org%2Fmodel%40v1' },
+    { model: 'multi/cursor/composer-2.5' },
+    { model: 'multi/cursor/composer-2.5/effort=high' },
+  ]);
+  assert.deepEqual(workerCatalog['multi-openai'].models, [
+    { id: 'org/model@v1', model: 'multi/openai/org%2Fmodel%40v1' },
+  ]);
+  assert.deepEqual(workerCatalog['multi-cursor'].models, [
+    { id: 'composer-2.5', model: 'multi/cursor/composer-2.5' },
+  ]);
+});
+
+test('parseProviderModel accepts hyphenated providers without adding workers', () => {
+  const model = 'multi/zai-coding-cn/org%2Fmodel%40v1';
+  assert.deepEqual(parseProviderModel(model), {
+    provider: 'zai-coding-cn',
+    id: 'org/model@v1',
+  });
+  const workerCatalog = buildWorkerCatalog([{ model }]);
+  assert.deepEqual(Object.keys(workerCatalog), []);
+});
+
 test('effort is a separate provider-wide field, never a model name', () => {
   assert.equal(resolveWorker(catalog, 'multi-openai', 'gpt-6-luna').effort, 'medium');
   assert.equal(resolveWorker(catalog, 'multi-zen', 'kimi-k3').effort, 'medium');
@@ -115,6 +143,23 @@ test('effort is a separate provider-wide field, never a model name', () => {
   assert.throws(
     () => resolveWorker(catalog, 'multi-cursor', 'composer-2.5/effort=high'),
     /no model/,
+  );
+  assert.throws(
+    () => resolveWorker(catalog, 'multi-cursor', 'multi/cursor/composer-2.5/effort=high'),
+    /no model/,
+  );
+  assert.throws(
+    () => resolveWorker(catalog, 'multi-cursor', 'multi/cursor/composer-2.5/'),
+    /no model/,
+  );
+  assert.equal(
+    resolveWorker(catalog, 'multi-cursor', 'multi/cursor/composer-2.5').model,
+    'multi/cursor/composer-2.5',
+  );
+  const nestedCatalog = buildWorkerCatalog([{ model: 'multi/openai/org%2Fmodel%40v1' }]);
+  assert.equal(
+    resolveWorker(nestedCatalog, 'multi-openai', 'multi/openai/org%2Fmodel%40v1').model,
+    'multi/openai/org%2Fmodel%40v1',
   );
   assert.throws(
     () => resolveWorker(catalog, 'multi-antigravity', 'claude-sonnet-4-6-high'),

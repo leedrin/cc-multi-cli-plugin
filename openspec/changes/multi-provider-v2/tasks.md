@@ -15,7 +15,7 @@
 
 - [x] 2.1 MP-0101：新增 `gw/model-identity.ts`（`encodeModelRoute`、`decodeModelRoute`），新增 `test/unit/native-model-identity.test.ts` 覆盖往返恒等、旧 ID 不变、连字符、`.`、`%2F`、`%40`、`[1m]` 在编码外、Cursor 预设，以及 `multi//x`、`multi/core/x`、大写、超长被拒绝
 - [ ] 2.2 MP-0102：把 `core/launcher.ts:780`、`gw/server.ts:1361`、`plugins/multi-cursor/src/models.ts:111`、`plugins/multi-zen/src/chat.ts:183`、`plugins/multi-zen/src/request.ts:36`、`hooks/worker-rows.ts:46` 改用 `decodeModelRoute`；`grep -n "split('/')"` 在这些文件中不再命中路由解析；`npm run test:mod` 通过
-- [ ] 2.3 MP-0103：`gw/worker-catalog.ts` 的 `parseProviderModel` 放宽 `[a-z]+`、`byProvider` 不再用 `includes('/')` 丢弃嵌套 ID；扩展 `native-worker-catalog.test.ts`：嵌套 ID 保留、Cursor 预设仍排除、`multi-zai-coding-cn` 可解析
+- [x] 2.3 MP-0103：`gw/worker-catalog.ts` 的 `parseProviderModel` 放宽 `[a-z]+`、`byProvider` 不再用 `includes('/')` 丢弃嵌套 ID；扩展 `native-worker-catalog.test.ts`：嵌套 ID 保留、Cursor 预设仍排除、`multi-zai-coding-cn` 可解析
 - [ ] 2.4 `providerRoute` 对未知 provider 改为 BadRequest，未启用 provider 返回明确错误；只修改 `test/unit/gateway-provider-bounded.test.ts:11` 一处既有断言；第 1 组快照除此之外不变
 - [ ] 2.5 `GatewayEvent.route`、`PreparedRequest.route` 放宽为 `string`；`CHANGELOG.md` 的 `## Unreleased` 写入两条破坏性改动（DD §20）
 
