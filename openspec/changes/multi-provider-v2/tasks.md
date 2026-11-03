@@ -9,7 +9,7 @@
 - [ ] 1.3 S2：运行 `npm run test:mod` 并做一次无推理的真实 Claude 启动，确认 `[1m]` 与已保存选择的行为；结论写入 DD §18
 - [x] 1.4 S3：在 scratchpad 里 `npm i --ignore-scripts @earendil-works/pi-ai@1.4.0`，测量磁盘增量和 `import` 耗时；结论写入 DD §18
 - [ ] 1.5 S4：让 Claude Code 指向本地假上游，只记录字段名、类型和 effort 枚举值（不记内容），确认 `stop_sequences`、`tool_choice`、`tool_reference`、`cache_control`、temperature、默认 `output_config.effort` 和 `thinking`；必要时调整 DD §12.3/§12.4，结论写入 DD §18
-- [ ] 1.6 按 DD §23 修订 PRD，确认每条修订都有对应位置；`npm run check` 通过
+- [x] 1.6 按 DD §23 修订 PRD，确认每条修订都有对应位置；`npm run check` 通过
 
 ## 2. P1 ModelIdentity（MP-0101–0103、DD §6）
 

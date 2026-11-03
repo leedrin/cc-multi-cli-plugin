@@ -736,61 +736,35 @@ export interface DirectRequestValidation {
   estimatedInputTokens: number;
 }
 
-export interface PreparedProviderRequest {
+export interface PreparedRequest {
+  label: string;
+  authHelp: string;
   endpoint: string;
-
-  headers?: Readonly<Record<string, string>>;
-
-  body: unknown;
-
-  /**
-   * Used for accounting and receipts.
-   */
-  upstreamProtocol: string;
-
-  estimatedInputTokens: number;
-
-  metadata?: Readonly<Record<string, unknown>>;
+  route: string;
+  inputTokens(): number;
+  completion?: Partial<GatewayEvent>;
+  requestEvent(agentId?: string): ProviderEvent;
+  failureEvent(status: number, agentId?: string): ProviderEvent;
+  open(signal: AbortSignal, fetchImpl: GatewayFetch): Promise<UpstreamOpen>;
 }
 
-export interface DirectProviderExecutionContext {
-  signal: AbortSignal;
-
-  stream: boolean;
-  emit?: Emit;
-
-  fetch: GatewayFetch;
-
-  originalRequest: MessagesRequest;
-
-  providerContext: DirectProviderContext;
-}
+export type UpstreamOpen =
+  | { ok: false; status: number; retryAfter: string | null }
+  | {
+      ok: true;
+      translate(
+        emit: Emit | undefined,
+        remember: RememberWorkerModel
+      ): Promise<MessagesResponse>;
+    };
 
 export interface DirectProviderAdapter {
-  validate(
-    request: MessagesRequest,
-    model: ModelDescriptor
-  ): DirectRequestValidation;
-
-  prepare(
-    request: MessagesRequest,
-    context: DirectProviderContext
-  ): Promise<PreparedProviderRequest>;
-
-  execute(
-    request: PreparedProviderRequest,
-    context: DirectProviderExecutionContext
-  ): Promise<MessagesResponse>;
+  prepare(input: ProviderRequestInput): PreparedRequest;
+  signaturePrefixes: readonly string[];
 }
 ```
 
-为什么 `prepare` 和 `execute` 分开：
-
-- token count endpoint 可以只执行 `validate/prepare`
-- cache key 可统一
-- request translation 可 unit test
-- transport 可 fixture test
-- response translation 可独立 test
+`prepare` 生成请求描述和 provider-specific 转换；`PreparedRequest.open(signal, fetch)` 执行 transport 并返回 `UpstreamOpen`。Zen、OpenAI 的 HTTP transport 由共享 `httpUpstream` 包装。token count endpoint 可只使用 `inputTokens()`，请求转换可独立单测，transport 和 response translation 可用 fixture 分别验证。Gateway 仍负责 keepalive、事件、失败映射和最终回复。
 
 ---
 
@@ -1162,14 +1136,15 @@ providerId = pi
 Direct Provider Runtime Backend
 ```
 
-真实路由仍然是：
+Pi AI 首批真实路由仅包括 curated 白名单中的 Provider：
 
-```text
-multi/openrouter/...
-multi/deepseek/...
-multi/google/...
-multi/zai/...
-```
+| Provider | 端点 | 环境变量 | curated 模型 |
+| --- | --- | --- | --- |
+| `deepseek` | `https://api.deepseek.com` | `DEEPSEEK_API_KEY` | `deepseek-v4-pro`、`deepseek-flash` |
+| `zai` | `https://api.z.ai/api/coding/paas/v4` | `ZAI_API_KEY` | `glm-5.3`、`glm-5.2` |
+| `zai-coding-cn` | `https://open.bigmodel.cn/api/coding/paas/v4` | `ZAI_CODING_CN_API_KEY` | `glm-5.3`、`glm-5.3-flash` |
+
+两个 GLM provider 均使用 coding plan 端点，不是通用按量付费 API；国际端点与 CN 端点分别使用各自环境变量，设置哪个就启用哪个。对应路由分别为 `multi/deepseek/deepseek-v4-pro`、`multi/zai/glm-5.3`、`multi/zai-coding-cn/glm-5.3`。首批模型由 Multi 明确维护白名单；Pi 的完整目录不因此全部暴露。Strata 是单独配置的自定义 Pi provider，见 §21，不属于 Pi 内置目录。
 
 ---
 
@@ -1221,6 +1196,8 @@ plugins/multi-pi/
       capabilities.ts
       usage.ts
 ```
+
+Backend 只加载 Pi 内置首批 Provider 的单独工厂（DeepSeek、Z.AI、Z.AI Coding CN），不加载 `providers/all`。Strata 不在 Pi 目录中，作为自定义 provider 通过 `createProvider` 注册，复用 `openai-completions` API，不读取 `models.json`。其 curated 模型为 `qwen3.8-flash-next`（仅文本）；只有设置 `MULTI_STRATA_BASE_URL` 才启用，地址仅接受 HTTPS 或回环 HTTP。`STRATA_API_KEY` 可选：回环服务未设 key 时传入占位值 `local`，非回环地址必须提供 key；模型目录与 key 来源由 Multi 显式维护。
 
 接口：
 
@@ -1304,7 +1281,7 @@ Multi MessagesResponse
 Claude Code executes tool
 ```
 
-Adapter 不执行或模拟工具，不发送 `message_delta` / `message_stop` 等终止事件；由 server 按统一收尾路径发出。流按连续 text/thinking delta 分段生成 Anthropic 内容块，不将 Pi 的 start/end 事件一一映射；thinking 签名在块结束时发出，若 `thinking_end` 改变已发送签名则显式失败。`toolcall_end` 前缓冲工具调用，检查 `argumentsError`，再还原工具别名并一次性发送完整调用；解析失败不得发送 `tool_use`。回放相邻同模型 thinking 块时合并。停止原因映射为 `stop → end_turn`、`length → max_tokens`、`toolUse → tool_use`；`error`、`aborted` 走失败/中止路径，`pending`、`deferred` 显式失败。`tool_choice` 支持 auto/none、any→required、指定工具名→别名；未声明的指定工具返回 `BadRequest`。请求输入支持 user text、仅在模型声明支持 image input 时接受的 base64 image，以及映射为 Pi `toolResult` 的 `tool_result`；`document` 和其他不支持的 Claude 专有输入块返回 `BadRequest`。assistant 内容块仅支持 text、thinking、tool_use，其他专有 assistant 块显式拒绝，不静默转换。Pi 的归一化 `Usage` 会把缺失计数写为 0；usage 必须通过 `onProviderStreamEvent` 观察 Pi 处理前的原始 chunk，不得从归一化 Usage 反推缺失字段，并按 §45 映射至 Canonical usage。
+Adapter 不执行或模拟工具，不发送 `message_delta` / `message_stop` 等终止事件；由 server 按统一收尾路径发出。流按连续 text/thinking delta 分段生成 Anthropic 内容块，不将 Pi 的 start/end 事件一一映射；thinking 签名在块结束时发出，若 `thinking_end` 改变已发送签名则显式失败。`toolcall_end` 前缓冲工具调用；若 `argumentsError` 存在，则在发出 `tool_use` 前显式失败，错误只报告固定类别，不转发或记录 `argumentsError` 对象及其原始参数；否则再还原工具别名并一次性发送完整调用。解析失败不得发送 `tool_use`。对应 fixture 必须使用金丝雀参数，断言错误、trace 和事件均不含原始参数。回放相邻同模型 thinking 块时合并。停止原因映射为 `stop → end_turn`、`length → max_tokens`、`toolUse → tool_use`；`error`、`aborted` 走失败/中止路径，`pending`、`deferred` 显式失败。`tool_choice` 支持 auto/none、any→required、指定工具名→别名；未声明的指定工具返回 `BadRequest`。请求输入支持 user text、仅在模型声明支持 image input 时接受的 base64 image，以及映射为 Pi `toolResult` 的 `tool_result`；`document` 和其他不支持的 Claude 专有输入块返回 `BadRequest`。assistant 内容块仅支持 text、thinking、tool_use，其他专有 assistant 块显式拒绝，不静默转换。Pi 的归一化 `Usage` 会把缺失计数写为 0；usage 必须通过 `onProviderStreamEvent` 观察 Pi 处理前的原始 chunk，不得从归一化 Usage 反推缺失字段，并按 §45 映射至 Canonical usage。
 
 ---
 
@@ -1393,6 +1370,8 @@ Anthropic credential
 ---
 
 # 26. Pi NativeHarness
+
+**后置项：** Pi NativeHarness 不属于首批 Pi AI Direct adapter，也不作为其启用或运行前提。只有用户明确要求 Pi 自己作为 agent 后，才启动 NativeHarness 的设计与实现；安全和隔离决策见 §27–§31。其路由语法（专用 `multi/pi/<provider>%2F<model>`，或复用 `multi/<provider>/...` 并以 worker 类型区分）仍待届时决定，不是首批路由要求。
 
 ## 26.1 目标
 
@@ -2010,6 +1989,8 @@ plugins/
       models.ts
       auth.ts
 ```
+
+`@earendil-works/pi-ai` 作为 core 分发依赖在仓库根 `package.json` 精确 pin（`"@earendil-works/pi-ai": "1.4.0"`），不使用范围版本；`multi-pi` 插件清单仅控制启用。首批不添加或依赖 `@earendil-works/pi-coding-agent`。
 
 ---
 
@@ -2720,7 +2701,55 @@ Acceptance：涉及 hooks 的改动必须通过 `npm run test:mod`；P0 快照�
 
 ---
 
-# 65. Phase 5 — Generic API Provider
+# 65. Phase 5 — Pi AI
+
+### MP-0601
+
+仅添加并精确锁定 `@earendil-works/pi-ai`，用于 Direct adapter 的 provider/model discovery 与调用。首批不引入 `@earendil-works/pi-coding-agent` / ModelRuntime，不读 Pi `auth.json`、`models.json` 或执行其中的 `!command`；凭据从明确列出的 Provider 环境变量读取。
+
+---
+
+### MP-0602
+
+实现：
+
+```text
+Pi AI provider discovery
+```
+
+---
+
+### MP-0603
+
+实现 Pi model → `ModelDescriptor`，只暴露 curated 白名单中的聊天模型，且仅接受 `api === 'openai-completions'`。工具能力由 Multi 的 curated catalog 明确声明，不从 Pi 元数据推测；白名单外模型不因 `MULTI_MODELS` 或 `MULTI_PI_MODELS` 而加入。
+
+---
+
+### MP-0604
+
+实现 Pi AI `DirectProviderAdapter`，由 Pi 提供 transport/event normalization，Claude Code 保留 tool loop。除 text、stream、reasoning、tool use、usage、abort 外，还必须：以 delta 类型管理 Anthropic block 生命周期并在结束时发 thinking signature；做签名往返及模型身份校验；映射 stop reason；缓冲 tool call、校验 `argumentsError`，并复用 `gw/tools.ts` 的 `toolName`、`callId`、`originalToolNames` 完成工具声明、历史回放、指定 `tool_choice` 和响应原名的别名往返；实现 `tool_choice` 映射与未声明工具拒绝；拒绝不支持的 Claude block 和 `pending`/`deferred` stopReason；流后错误走失败路径。Pi 的归一化 `Usage` 会把缺失计数写为 0，必须通过 `onProviderStreamEvent` 观察 Pi 处理前的原始 chunk，并按 §45 映射到 Canonical usage，不得从归一化 Usage 反推缺失字段。请求输入接受 user text、仅当模型声明支持 image input 时接受的 base64 image，以及映射为 Pi `toolResult` 的 `tool_result`；`document` 和其他不支持的 Claude 专有输入块返回 `BadRequest`。assistant 内容块仅支持 text、thinking、tool_use，其他专有 assistant 块显式拒绝。Adapter 返回 `MessagesResponse`，不发送 message terminal 事件；只由 server 统一收尾。由于 `env: {}` 不隔离 Pi 对 `process.env` 的回退，必须显式设置 `cacheRetention: 'short'` 并测试环境变量不能改变请求。
+
+---
+
+### MP-0605
+
+接入首批 Pi 内置 Provider：`deepseek`、`zai`、`zai-coding-cn`，对应端点、环境变量和 curated 模型见 §19.1。只加载这三个 Pi provider 工厂，不加载 `providers/all`。
+
+另接入自定义 Strata provider：通过 `createProvider` 与 `openai-completions` API，不读取 Pi `models.json`；使用 `MULTI_STRATA_BASE_URL`，地址和凭据约束见 §21。Strata 单独验收，不作为首批 Pi 内置目录的一员，也不阻塞 Milestone D。
+
+---
+
+### MP-0606
+
+实现由 registry descriptor 驱动的 Pi credential integration：只读取已启用 Provider 明确声明的环境变量，将凭据仅传入 adapter 内存，并在任何子进程创建前从 `process.env` 删除这些凭据，保护 Claude 与其他 harness 子进程环境。未启用的 Provider 凭据保持原样。不读取 `auth.json` / `models.json`，不执行 `!command`。
+
+Acceptance：凭据不进入 Claude 或其他 harness 子进程 env、model metadata、Mod payload、receipt、trace、错误消息；环境回退不能改变请求。Pi NativeHarness 原生工具相关隔离是后置，不属于此阶段。
+
+---
+
+---
+
+# 66. Phase 6 — Generic API Provider
 
 ### MP-0501
 
@@ -2773,67 +2802,6 @@ OpenAI Responses
 ```
 
 第二种更利于长期统一。
-
----
-
----
-
-# 66. Phase 6 — Pi AI
-
-### MP-0601
-
-仅添加并精确锁定 `@earendil-works/pi-ai`，用于 Direct adapter 的 provider/model discovery 与调用。首批不引入 `@earendil-works/pi-coding-agent` / ModelRuntime，不读 Pi `auth.json`、`models.json` 或执行其中的 `!command`；凭据从明确列出的 Provider 环境变量读取。
-
----
-
-### MP-0602
-
-实现：
-
-```text
-Pi AI provider discovery
-```
-
----
-
-### MP-0603
-
-实现：
-
-```text
-Pi model → ModelDescriptor
-```
-
----
-
-### MP-0604
-
-实现 Pi AI `DirectProviderAdapter`，由 Pi 提供 transport/event normalization，Claude Code 保留 tool loop。除 text、stream、reasoning、tool use、usage、abort 外，还必须：以 delta 类型管理 Anthropic block 生命周期并在结束时发 thinking signature；做签名往返及模型身份校验；映射 stop reason；缓冲 tool call、校验 `argumentsError` 并经别名往返；实现 `tool_choice` 映射与未声明工具拒绝；拒绝不支持的 Claude block 和 `pending`/`deferred` stopReason；流后错误走失败路径。Pi 的归一化 `Usage` 会把缺失计数写为 0，必须通过 `onProviderStreamEvent` 观察 Pi 处理前的原始 chunk，并按 §45 映射到 Canonical usage，不得从归一化 Usage 反推缺失字段。请求输入接受 user text、仅当模型声明支持 image input 时接受的 base64 image、以及映射为 Pi `toolResult` 的 `tool_result`；`document` 和其他不支持的 Claude 专有输入块返回 `BadRequest`。assistant 内容块仅支持 text、thinking、tool_use，其他专有 assistant 块显式拒绝。Adapter 返回 `MessagesResponse`，不发送 message terminal 事件；只由 server 统一收尾。
-
----
-
-### MP-0605
-
-接入首批 Provider：
-
-建议顺序：
-
-```text
-OpenRouter
-DeepSeek
-Google
-Kimi/Moonshot
-ZAI
-Groq
-```
-
----
-
-### MP-0606
-
-实现由 registry descriptor 驱动的 Pi credential integration：只读取已启用 Provider 明确声明的环境变量，将凭据仅传入 adapter 内存，并在任何子进程创建前从 `process.env` 删除这些凭据，保护 Claude 与其他 harness 子进程环境。未启用的 Provider 凭据保持原样。不读取 `auth.json` / `models.json`，不执行 `!command`。
-
-Acceptance：凭据不进入 Claude 或其他 harness 子进程 env、model metadata、Mod payload、receipt、trace、错误消息；环境回退不能改变请求。Pi NativeHarness 原生工具相关隔离是后置，不属于此阶段。
 
 ---
 
@@ -3010,12 +2978,12 @@ Generic API
 ## Milestone D
 
 ```text
-Pi AI
+Pi AI: DeepSeek + GLM
 ```
 
 完成标准：
 
-> 至少 OpenRouter + DeepSeek 可通过 Pi AI 在 Claude Code 中运行 Claude tool loop。
+> DeepSeek 和 GLM 至少各有一个模型可通过 Pi AI 在 Claude Code 中完成多轮 Claude tool loop、thinking 往返及用量显示。维护者持有两家的 coding plan key，两家都必须通过经批准的 live 验收；GLM 只要求 key 所属端点通过 live，另一个端点以离线测试验收并在 CHANGELOG 说明。Strata 单独验收，不阻塞本里程碑。Live 每个 provider 最多 10 次上游调用，按上游调用计数；耗尽即记为“验收未完成”，增加预算须重新获用户批准。
 
 ---
 
@@ -3381,13 +3349,13 @@ Pi Coding Agent
 开始 Provider core 大规模重构前，至少满足以下任一条件：
 
 ```text
-A. Usage Patchset 已合入 feature/multi-provider-v2
+A. 从 Usage-Correctness 开分支，并将该 patchset 纳入 feature/multi-provider-v2
 ```
 
 或：
 
 ```text
-B. upstream 已提供等价的 Usage / Cache accounting 修复
+B. upstream 已提供等价的 Usage / Cache accounting 修复（当前尚未满足，须先核实并记录）
 ```
 
 原因是 DirectProviderAdapter、Generic API Provider、Pi AI 都需要可信的 Usage / Receipt 观测面进行验证。
