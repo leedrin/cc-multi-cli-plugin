@@ -262,14 +262,22 @@ Native Harness:
   grok
 ```
 
-当前主要硬编码位置：
+当前 Provider 写死位置不止以下四处，重构必须逐项收口：
 
-```text
-plugins/multi-core/src/launcher.ts
-plugins/multi-core/src/gateway/server.ts
-plugins/multi-core/src/gateway/worker-catalog.ts
-plugins/multi-core/src/install/plugins.ts
-```
+| 位置 | 硬编码内容 |
+| --- | --- |
+| `plugins/multi-core/src/gateway/provider.ts` | Provider 联合类型、Harness/provider 列表、auto-review 策略及未知路由回退 |
+| `plugins/multi-core/src/gateway/provider-workers.ts`、`plugins/multi-core/hooks/provider.ts` | worker 类型与 Harness 判断 |
+| `plugins/multi-core/src/gateway/provider-request.ts` | 事件和请求 route 联合类型 |
+| `plugins/multi-core/src/gateway/provider-usage.ts` | usage provider 类型、reader 与 unavailable 映射 |
+| `plugins/multi-core/src/gateway/worker-catalog.ts` | worker provider/label、路由解析和 provider 分组 |
+| `plugins/multi-core/src/gateway/server.ts` | GatewayEvent route、usage readers、provider/harness/reviewer/display-tools 分派、签名前缀和路由解析 |
+| `plugins/multi-core/src/launcher.ts` | Provider imports/discovery、worker runs、工具模式、picker 与子进程环境 |
+| `plugins/multi-core/src/install/plugins.ts`、`plugins/multi-core/src/install/bootstrap.ts`、`plugins/multi-core/src/account.ts` | 安装、启用选择及账号插件列表 |
+| `.claude-plugin/marketplace.json`、`scripts/versioning.ts` | Marketplace 条目与版本 pin |
+| `plugins/multi-cursor/src/models.ts`、`plugins/multi-zen/src/chat.ts`、`plugins/multi-zen/src/request.ts`、`plugins/multi-core/hooks/worker-rows.ts` | 其他路由解析位置 |
+
+该清单以详细设计 §4 为准；实现时必须检查其列出的全部位置，而非仅修改 launcher、server、worker catalog 和 install。
 
 当前 Native Harness contract：
 
@@ -979,7 +987,7 @@ export const zenProvider: ProviderDescriptor = {
   worker: {
     defaultModelId: ZEN_DEFAULT_WORKER_MODEL,
     defaultEffort: ZEN_WORKER_EFFORT,
-    toolMode: 'claude'
+    toolMode: 'claude-tools'
   }
 };
 ```
@@ -1408,6 +1416,8 @@ worker。
 
 # 27. PiHarness contract
 
+**后置项：** Pi NativeHarness 只有在用户明确要求 Pi 自己作为 agent 后启动（见 §31、§69）。首批 Pi AI Direct adapter 不实现或依赖此 contract。
+
 文件：
 
 ```text
@@ -1443,6 +1453,8 @@ export class PiHarness implements NativeHarness {
   close(): Promise<void>;
 }
 ```
+
+`close()` 的资源释放语义、Pi session/子进程关闭顺序及失败处理均待 NativeHarness 启动前设计；不得据此假设能重置或回退 native session state。
 
 ---
 
@@ -1512,6 +1524,8 @@ worker
 
 # 30. Pi Native session record
 
+该 native session record 仅属后置的 Pi NativeHarness（MP-07xx）；首批 Pi AI Direct 不创建或持久化它。NativeHarness 启动前必须确定会话文件路径、权限、生命周期和凭据风险，不得把 cwd 当作隔离边界，也不得跨 workspace 复用会话。
+
 推荐保存：
 
 ```ts
@@ -1531,7 +1545,7 @@ interface PiHarnessSaved
 }
 ```
 
-`usage` 只复用 Multi 的 Canonical token usage；不另建 Pi usage shape，目录 `pricing` / 成本估算不进入 accounting。
+`usage` 只复用 Multi 的 Canonical token usage；不另建 Pi usage shape，目录 `pricing` / 成本估算不进入 accounting。Pi 的自动压缩、重试可能产生额外计费，计费归属与记录方式须在 NativeHarness 开工前决定。
 
 不要把：
 
@@ -1622,29 +1636,9 @@ fail closed
 
 # 32. Pi extension 风险
 
-Pi extension 与 Pi 进程拥有相同 OS 权限。
+本节属于后置 Pi NativeHarness（MP-07xx），不适用于首批 Pi AI Direct adapter。Pi extension 与 Pi 进程拥有相同 OS 权限，Claude permission 无法证明控制了 extension 内部动作。
 
-因此 `multi-pi` 第一版建议：
-
-```text
-默认禁用第三方 Pi extensions
-```
-
-或：
-
-```text
-只加载显式 allowlist
-```
-
-否则 Claude permission 无法证明控制了 extension 内部动作。
-
-未来可以增加：
-
-```text
-MULTI_PI_EXTENSIONS=trusted-a,trusted-b
-```
-
-但不能默认继承用户全部 Pi extension。
+NativeHarness 启动前必须确定 extension、配置文件、context files、skills、`agentDir` 和遥测的隔离范围，并验证遥测默认行为；不能把“禁用第三方 extensions”误认为已隔离其余 Pi 配置或进程行为。第一版应默认禁用第三方 extensions，或仅加载显式 allowlist，且不能默认继承用户全部 Pi extension。是否以及如何提供 `MULTI_PI_EXTENSIONS=trusted-a,trusted-b` 由后置方案决定。
 
 ---
 
@@ -1726,31 +1720,9 @@ settleOrAbort
 
 # 36. Pi compaction
 
-第一阶段：
+本节属于后置 Pi NativeHarness（MP-07xx），不属于首批 Pi AI Direct adapter。Native state is never rewound：不得为了匹配 Claude transcript 而 rewind 或重放 Pi session。
 
-```text
-PiHarness compaction = provider-owned
-```
-
-不要强行 rewind Pi session。
-
-要求遵守 Multi 当前 contract：
-
-```text
-Native state is never rewound.
-```
-
-如果 Claude transcript 已被 compact：
-
-```text
-continue from Pi native record
-```
-
-必要时注入：
-
-```text
-history divergence notice
-```
+NativeHarness 启动前须确定 Pi 自有压缩/重试导致的额外上游调用和费用如何计量，并确保不会将目录 pricing 或估算成本当作 usage accounting。若 Claude transcript 已被 compact，继续使用 Pi native record，必要时注入 history divergence notice；不得据此回退 native state。
 
 ---
 
@@ -1784,8 +1756,8 @@ export interface ProviderWorker {
   effort?: string;
 
   toolMode:
-    | 'claude'
-    | 'native';
+    | 'claude-tools'
+    | 'native-mapped';
 }
 ```
 
@@ -1812,6 +1784,8 @@ buildWorkerCatalog(
 multi-<providerId>
 ```
 
+Provider ID 必须符合 `^[a-z0-9][a-z0-9._-]{0,63}$`，并保留 `core`（`multi-core` 是插件名，不能作为 provider worker）。ProviderDescriptor 可覆盖默认 worker type；注册时必须拒绝与保留或现有 worker slug 冲突。
+
 例如：
 
 ```text
@@ -1837,10 +1811,12 @@ worker: {
 
 # 39. Direct worker
 
+首批 Direct provider 使用 `toolMode = 'claude-tools'`：工具由 Claude Code 执行，Pi AI Direct adapter 也沿用该模式。Native Harness 的 `toolMode = 'native-mapped'` 属于后置范围，只有完成 Native 工具映射和权限验证后才能启用。
+
 如果：
 
 ```text
-toolMode = claude
+toolMode = 'claude-tools'
 ```
 
 定义：
@@ -1912,6 +1888,8 @@ const runtime =
   });
 ```
 
+动态 worker 必须受现有 `--agents` 参数预算约束：验证所有 provider 同时启用时的 worker 定义，在 Windows 8000 字符限制下不超限；超限沿用现有显式报错，不得静默裁剪。`core` 保留为不可用作 provider worker 的 ID。涉及 hooks 的阶段还必须通过 `npm run test:mod`。
+
 ---
 
 ---
@@ -1937,6 +1915,8 @@ plugins/*/src/provider.ts
 ```ts
 export default ProviderDescriptor;
 ```
+
+动态加载必须遵守信任边界：仅从已安装、受信任的插件 manifest 解析并校验入口；不得从 cwd、项目配置或任意用户路径解析/执行 Provider 代码。任何允许的导入都须落在插件自身受控目录，并遵守 core 当前安装与路径校验规则。
 
 ---
 
@@ -2544,15 +2524,7 @@ provider routing characterization test
 
 ### MP-0003
 
-记录 public behavior snapshot：
-
-```text
-/model rows
-worker type
-usage
-permission
-error
-```
+建立 v2 特征快照：真实 picker 行、权限断言、`%2F`、连字符 provider、Cursor 预设和 `[1m]`。它是 P0 的先行验证，不是泛化的 public behavior snapshot；快照须在未改动代码上通过，验证结果记录在详细设计（DD）§18「先行验证」。
 
 ---
 
@@ -2644,6 +2616,8 @@ Acceptance：
 添加 fake provider 不修改 worker-catalog.ts
 ```
 
+涉及 hooks 的改动还必须通过 `npm run test:mod`。
+
 ---
 
 ---
@@ -2674,14 +2648,9 @@ zenDirectAdapter
 
 ### MP-0303
 
-`server.ts` 删除：
+`server.ts` 不再包含 Zen request construction；将现有 `PreparedRequest`（`send` + `translate`）作为演进起点，统一成 `prepare` → `PreparedRequest.open(signal, fetch)` → `UpstreamOpen`，由共用 HTTP 后端包装现有 Zen 行为。server 继续持有 keepalive、事件、失败映射和最终回复；Provider 模块不写 HTTP 回复或 terminal 事件。
 
-```text
-handleZen
-prepareZenRequest
-```
-
-Provider-specific code。
+验收：`plugins/multi-core/src/gateway/server.ts` 不 import `plugins/multi-*`；Zen 和 OpenAI 的既有测试断言保持不变。
 
 ---
 
@@ -2744,6 +2713,8 @@ usage dashboard 动态注册。
 ### MP-0405
 
 `MULTI_ENABLED_PROVIDERS` 动态验证。
+
+Acceptance：涉及 hooks 的改动必须通过 `npm run test:mod`；P0 快照除明确允许的差异外不变。
 
 ---
 
@@ -2972,7 +2943,7 @@ plugin manifest。
 
 ### MP-0803
 
-动态 import ProviderDescriptor。
+动态 import ProviderDescriptor 时，只允许从 core 自身目录内的固定相对路径加载；不得从 cwd、项目配置或任意用户路径解析。未来的外部插件 API 属于后置范围，不能放宽当前受控路径边界。
 
 ---
 
@@ -3020,7 +2991,7 @@ OpenAI migration
 
 完成标准：
 
-> `server.ts` 不存在 Zen/OpenAI request-building 逻辑。
+> `plugins/multi-core/src/gateway/server.ts` 不 import `plugins/multi-*`；Zen 和 OpenAI 现有测试断言不变。迁移从现有 `PreparedRequest` 的 `send` + `translate` 边界演进为 `prepare` → `PreparedRequest.open(signal, fetch)` → `UpstreamOpen`，HTTP 后端复用共用包装；gateway 仍负责 keepalive、事件、失败映射及最终回复。
 
 ---
 
@@ -3071,6 +3042,7 @@ Pi NativeHarness
 ```text
 MP-0001
 MP-0002
+MP-0003
 MP-0101
 MP-0102
 MP-0103
