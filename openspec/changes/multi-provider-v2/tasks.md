@@ -4,7 +4,7 @@
 
 ## 1. P0 基线与先行验证（MP-0003、DD §18）
 
-- [ ] 1.1 MP-0003：新增特征快照测试 `test/unit/native-provider-snapshot.test.ts`，覆盖真实 picker 行、权限断言、`%2F` 编码、连字符 provider、Cursor 预设和 `[1m]`；在未改动的代码上运行 `npm test` 通过
+- [x] 1.1 MP-0003：新增特征快照测试 `test/unit/native-provider-snapshot.test.ts`，覆盖真实 picker 行、权限断言、`%2F` 编码、连字符 provider、Cursor 预设和 `[1m]`；在未改动的代码上运行 `npm test` 通过
 - [ ] 1.2 S1：在 scratchpad 用假 key 和录制的 SSE，通过 injected fetch 离线跑真实 `deepseekProvider` + `openai-completions`，确认 `start → thinking/text/toolcall → done`、`onProviderStreamEvent` 可见 usage、thinking 可往返；结论写入 DD §18。失败则停止第 6–9 组并重新评估（实验代码不进仓库，不联网）
 - [ ] 1.3 S2：运行 `npm run test:mod` 并做一次无推理的真实 Claude 启动，确认 `[1m]` 与已保存选择的行为；结论写入 DD §18
 - [ ] 1.4 S3：在 scratchpad 里 `npm i --ignore-scripts @earendil-works/pi-ai@1.4.0`，测量磁盘增量和 `import` 耗时；结论写入 DD §18
@@ -42,7 +42,7 @@
 - [ ] 5.2 MP-0402：`GatewayOptions` 改为接收 `runtime`，删除 `zen`、`cursor`、`antigravity`、`grok`、`reviewers`、`displayTools`、`usageReaders`；`ProviderRuntime.close()` 沿用 `Closable`；`native-gateway*` 测试通过
 - [ ] 5.3 MP-0403：`WORKER_RUNS`、`direct`、`pickerSettings`、`gatewayEnvironment` 改为由 Registry 派生；每个 route provider 一个 worker；Agent 定义 ≤8000 的 `--agents` 预算测试通过
 - [ ] 5.4 MP-0404：`gw/provider-usage.ts` 的 `UsageProvider`、`providers`、`unavailable` 改为表驱动；`native-provider-usage.test.ts` 断言不变
-- [ ] 5.5 MP-0405：`.claude-plugin/marketplace.json` 与 `scripts/versioning.ts` 支持新增插件条目；`npm run check:versions` 通过
+- [x] 5.5 MP-0405：`.claude-plugin/marketplace.json` 与 `scripts/versioning.ts` 支持新增插件条目；`npm run check:versions` 通过
 - [ ] 5.6 第 1 组快照除明确允许的差异外不变；usage 相关既有测试断言未修改；`npm run check` 与 `npm run test:mod` 通过
 
 ## 6. P5a multi-pi 插件与 DeepSeek（MP-0601–0604、0606、DD §9–§13）
