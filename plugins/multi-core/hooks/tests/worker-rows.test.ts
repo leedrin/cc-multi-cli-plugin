@@ -130,6 +130,42 @@ test('a completed worker row reads the model from its result after a reload', as
   }
 });
 
+test('a Cursor preset remains in the worker label with encoded params and the 1m tag', async ($, on) => {
+  mock.clock(on);
+  gateway(on);
+  const drawn = engine(on);
+  for (const [route, expected] of [
+    ['multi/cursor/composer-test/effort=high', 'composer-test/effort=high'],
+    [
+      'multi/cursor/composer-test/effort%3Dhigh%2Cmode%3Dfast[1m]',
+      'composer-test/effort=high,mode=fast',
+    ],
+  ]) {
+    await agentRow($, 'terminal', {
+      tool_use_id: `toolu_preset_${route}`,
+      input: { ...input, subagent_type: 'multi-cursor' },
+      output: { status: 'completed', resolvedModel: route },
+    });
+    expect((drawn.at(-1) as { input: { description: string } }).input.description).toBe(
+      `Fix tests · Cursor · ${expected}`,
+    );
+  }
+});
+
+test('a malformed percent escape keeps the worker model spelling visible', async ($, on) => {
+  mock.clock(on);
+  gateway(on);
+  const drawn = engine(on);
+  await agentRow($, 'terminal', {
+    tool_use_id: 'toolu_bad_escape',
+    input: { ...input, subagent_type: 'multi-antigravity' },
+    output: { status: 'completed', resolvedModel: 'multi/antigravity/gemini%ZZ' },
+  });
+  expect((drawn.at(-1) as { input: { description: string } }).input.description).toBe(
+    'Fix tests · Antigravity · gemini%ZZ',
+  );
+});
+
 test('Claude agents and other tools keep their rows unlabelled', async ($, on) => {
   mock.clock(on);
   gateway(on);

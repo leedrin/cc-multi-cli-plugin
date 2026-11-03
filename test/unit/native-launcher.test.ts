@@ -640,6 +640,16 @@ test('launcher argument limits are platform-aware and identify largest providers
   assert.throws(
     () =>
       checkLauncherArgumentLimit(
+        { ...agents, 'invalid-worker': { ...agents['openai-worker'], model: 'multi//broken' } },
+        { command: 'cmd.exe', args: ['/c', 'claude.cmd', 'x'.repeat(8000)] },
+        'C:\\bin\\claude.cmd',
+        'win32',
+      ),
+    /Largest providers: .*unknown/,
+  );
+  assert.throws(
+    () =>
+      checkLauncherArgumentLimit(
         agents,
         { command: 'cmd.exe', args: ['/c', 'claude.cmd', 'x'.repeat(8000)] },
         'C:\\bin\\claude.cmd',

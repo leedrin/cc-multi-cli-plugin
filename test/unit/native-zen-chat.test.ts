@@ -555,6 +555,22 @@ test('fromChat emits strictly sequential blocks, one per reasoning or text segme
   ]);
 });
 
+test('Zen route decoding keeps routed reasoning signatures bound to the model ID', () => {
+  const signature = 'multi-zen-chat:kimi-k3:eyJyZWFzb25pbmciOiIifQ';
+  const body = toChat(
+    {
+      messages: [
+        { role: 'assistant', content: [{ type: 'thinking', thinking: '', signature }] },
+        { role: 'user', content: 'continue' },
+      ],
+    },
+    'multi/zen/kimi-k3',
+  );
+  assert.equal(body.messages[0]?.role, 'assistant');
+  assert.equal(body.messages[1]?.role, 'user');
+  assert.equal(body.model, 'multi/zen/kimi-k3');
+});
+
 test('toChat joins separate system and user text blocks with a newline', () => {
   const request = toChat(
     {

@@ -1,4 +1,5 @@
 import type { ModelListItem, ModelSelection } from '@cursor/sdk';
+import { decodeModelRoute } from '../../multi-core/src/gateway/model-identity.ts';
 
 export interface CursorModelOption {
   model: string;
@@ -108,7 +109,8 @@ export function cursorSelection(option: CursorModelOption, effort?: string): Mod
     (p) => p.id === 'effort' || p.id === 'reasoning_effort',
   );
   // Explicit presets win; models without an effort parameter have nothing to set.
-  if (!effort || !parameter || option.model.split('/').length > 3) {
+  const identity = decodeModelRoute(option.model);
+  if (!identity || !effort || !parameter || identity.preset !== undefined) {
     return option.selection;
   }
   if (!parameter.values.some((v) => v.value === effort)) {

@@ -23,6 +23,10 @@ test('Cursor catalog preserves actual IDs and presets; effort never silently sub
   });
   assert.throws(() => cursorSelection(options[0], 'ultracode'), /supports effort/);
   assert.equal(cursorSelection(options[1], 'high').params?.[0].value, 'low');
+  assert.deepEqual(
+    cursorSelection({ ...options[0], model: 'multi/cursor/test-model[1m]' }, 'high'),
+    { id: 'test-model', params: [{ id: 'effort', value: 'high' }] },
+  );
   assert.deepEqual(cursorModelOptions([{ id: 'auto-smart', displayName: 'Router' }]), []);
 });
 

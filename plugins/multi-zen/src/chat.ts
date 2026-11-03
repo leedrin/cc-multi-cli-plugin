@@ -7,6 +7,7 @@ import type {
   ResponseContentBlock,
   StopReason,
 } from '../../multi-core/src/gateway/messages.ts';
+import { decodeModelRoute } from '../../multi-core/src/gateway/model-identity.ts';
 import { isRecord } from '../../multi-core/src/gateway/record.ts';
 import { prefixSafeLength, readSse } from '../../multi-core/src/gateway/responses.ts';
 import { callId, toolName } from '../../multi-core/src/gateway/tools.ts';
@@ -180,7 +181,10 @@ function signature(model: string, reasoning: string): string {
 }
 
 function canonicalModel(model: string): string {
-  return model.replace(/^multi\/zen\//, '');
+  const identity = decodeModelRoute(model);
+  return identity?.providerId === 'zen'
+    ? model.slice('multi/zen/'.length)
+    : model.replace(/^multi\/zen\//, '');
 }
 
 function ownReasoning(model: string, block: ContentBlock): string | undefined {

@@ -1,5 +1,6 @@
 import type { Register } from 'claude-code';
 import { atom, read } from 'claude-code';
+import { decodeModelRoute } from '../src/gateway/model-identity.ts';
 import { isProviderWorker } from '../src/gateway/provider-workers.ts';
 
 // State values are named where they are read: the engine's scan reads an atom's plugin and key
@@ -35,9 +36,16 @@ export function workerLabel(model: unknown): string | undefined {
   if (typeof model !== 'string') {
     return undefined;
   }
-  const [, name = '', spelled = ''] = /^multi\/([a-z]+)\/(.+)$/.exec(model) ?? [];
-  const provider = Object.hasOwn(PROVIDER_LABELS, name) ? PROVIDER_LABELS[name] : undefined;
-  if (!provider || !spelled) {
+  const identity = decodeModelRoute(model);
+  const [, fallbackProvider = '', spelled = ''] = /^multi\/([a-z]+)\/(.+)$/.exec(model) ?? [];
+  const providerId = identity?.providerId ?? fallbackProvider;
+  const provider = Object.hasOwn(PROVIDER_LABELS, providerId)
+    ? PROVIDER_LABELS[providerId]
+    : undefined;
+  if (!provider) {
+    return undefined;
+  }
+  if (!spelled) {
     return undefined;
   }
   const raw = spelled.replace(/\[1m\]$/i, '');

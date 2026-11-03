@@ -91,6 +91,10 @@ test('Zen request enforces capabilities, output limits, and protocol-specific ef
   const image = { ...request(chatModel), messages: [imageMessage()] };
   assert.doesNotThrow(() => zenRequest(image, 'cache-key'));
   assert.throws(
+    () => zenRequest({ ...request(), model: 'multi/zen/org%2Fmodel' }, 'cache-key'),
+    /Unknown Zen model/,
+  );
+  assert.throws(
     () => zenRequest({ ...image, model: 'multi/zen/glm-5.2' }, 'cache-key'),
     /does not support images/,
   );

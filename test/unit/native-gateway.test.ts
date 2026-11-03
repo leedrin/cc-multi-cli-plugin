@@ -1291,6 +1291,15 @@ async function harnessPermissionModes(session = 'routing-session') {
   return modes;
 }
 
+test('provider enablement gates on the decoded provider identity with unchanged errors', async (t) => {
+  const call = await gateway(t, () => assert.fail('Disabled providers must not reach upstream'), {
+    enabledProviders: ['openai'],
+  });
+  const response = await call({ ...body, model: 'multi/zen/gpt-5.6-luna' });
+  assert.equal(response.status, 400);
+  assert.match(await response.text(), /This provider plugin is not enabled for this session\./);
+});
+
 test('provider routing sends each external model to one handler route', async (t) => {
   const session = 'routing-session';
   const modes = await harnessPermissionModes(session);

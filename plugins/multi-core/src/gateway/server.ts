@@ -48,6 +48,7 @@ import { ModCompactions } from './mod-compaction.ts';
 import { MOD_KEY_HEADER, ModSessionKeys } from './mod-keys.ts';
 import { handleModRoute } from './mod-routes.ts';
 import type { PermissionContext, PermissionModes } from './mode-hook.ts';
+import { decodeModelRoute } from './model-identity.ts';
 import { type NativeHarness, nativeHarnessErrorStatus } from './native-harness.ts';
 import {
   autoReviewPolicy,
@@ -1358,7 +1359,8 @@ export function failureMessage(error: unknown, model: string): MessagesResponse 
 }
 
 function assertProviderEnabled(model: string | null, enabled: readonly string[] | undefined) {
-  if (model && enabled && !enabled.includes(model.split('/')[1])) {
+  const provider = model ? decodeModelRoute(model)?.providerId : undefined;
+  if (model && enabled && !enabled.includes(provider ?? '')) {
     throw new BadRequest('This provider plugin is not enabled for this session.');
   }
 }

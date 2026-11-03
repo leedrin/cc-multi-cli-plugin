@@ -1,4 +1,5 @@
 import type { MessagesRequest } from '../../multi-core/src/gateway/messages.ts';
+import { decodeModelRoute } from '../../multi-core/src/gateway/model-identity.ts';
 import type {
   ResponsesInputContent,
   ResponsesRequest,
@@ -33,7 +34,8 @@ function validateMedia(request: ResponsesRequest, model: ZenModel) {
 
 /** Pure translation keeps repeated prefixes byte-stable; the caller owns credentials. */
 export function zenRequest(body: MessagesRequest, cacheKey: string) {
-  const model = zenModel(body.model?.replace(/^multi\/zen\//, '') ?? '');
+  const identity = body.model ? decodeModelRoute(body.model) : undefined;
+  const model = identity?.providerId === 'zen' ? zenModel(identity.modelId) : undefined;
   if (!model || body.model !== `multi/zen/${model.id}`) {
     throw new Error('Unknown Zen model. Run the launcher with --zen-models for supported choices.');
   }

@@ -73,6 +73,7 @@ import {
 } from './gateway/harness-settings.ts';
 import { ModBridge } from './gateway/mod-bridge.ts';
 import { PermissionModes } from './gateway/mode-hook.ts';
+import { decodeModelRoute } from './gateway/model-identity.ts';
 import { nestedClaudeShim, withPathPrefix } from './gateway/nested-env.ts';
 import { nativeSpelling } from './gateway/provider.ts';
 import type { ProviderUsageReader } from './gateway/provider-usage.ts';
@@ -777,7 +778,7 @@ export function checkLauncherArgumentLimit(
   }
   const providers = new Map<string, number>();
   for (const [name, agent] of Object.entries(agents)) {
-    const provider = agent.model.split('/')[1] ?? 'unknown';
+    const provider = decodeModelRoute(agent.model)?.providerId ?? 'unknown';
     providers.set(
       provider,
       (providers.get(provider) ?? 0) + Buffer.byteLength(JSON.stringify({ [name]: agent })),
