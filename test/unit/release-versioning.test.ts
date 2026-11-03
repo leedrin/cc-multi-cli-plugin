@@ -250,6 +250,81 @@ test('the consistency check names each field or pin that disagrees with package.
   ]);
 });
 
+test('the consistency check requires marketplace entries and checks every discovered plugin pin', async (t) => {
+  const root = await fixture(t);
+  const pluginFile = 'plugins/multi-pi/.claude-plugin/plugin.json';
+  await mkdir(path.dirname(path.join(root, pluginFile)), { recursive: true });
+  await writeFile(
+    path.join(root, pluginFile),
+    json({
+      version: '0.3.0',
+      name: 'multi-pi',
+      dependencies: [{ name: 'multi-core', version: '~0.2.0' }],
+    }),
+  );
+
+  assert.deepEqual(await checkVersions(root), [
+    '.claude-plugin/marketplace.json: plugins[multi-pi] is missing',
+    'plugins/multi-pi/.claude-plugin/plugin.json: dependencies[multi-core].version is ~0.2.0, expected ~0.3.0',
+  ]);
+
+  const marketplaceFile = '.claude-plugin/marketplace.json';
+  const marketplace = JSON.parse(await readFile(path.join(root, marketplaceFile), 'utf8')) as {
+    plugins: Array<Record<string, unknown>>;
+  };
+  marketplace.plugins.push({ name: 'multi-pi', source: './plugins/multi-pi', version: '0.3.0' });
+  await writeFile(path.join(root, marketplaceFile), json(marketplace));
+  await writeFile(
+    path.join(root, pluginFile),
+    json({
+      version: '0.3.0',
+      name: 'multi-pi',
+      dependencies: [{ name: 'multi-core', version: '~0.2.0' }],
+    }),
+  );
+
+  assert.deepEqual(await checkVersions(root), [
+    'plugins/multi-pi/.claude-plugin/plugin.json: dependencies[multi-core].version is ~0.2.0, expected ~0.3.0',
+  ]);
+
+  await writeFile(
+    path.join(root, pluginFile),
+    json({
+      version: '0.3.0',
+      name: 'multi-pi',
+      dependencies: [{ name: 'multi-core', version: '~0.3.0' }],
+    }),
+  );
+  assert.deepEqual(await checkVersions(root), []);
+});
+
+test('release leaves pins for plugins missing from the marketplace unchanged', async (t) => {
+  const root = await fixture(t);
+  const pluginFile = 'plugins/multi-pi/.claude-plugin/plugin.json';
+  await mkdir(path.dirname(path.join(root, pluginFile)), { recursive: true });
+  await writeFile(
+    path.join(root, pluginFile),
+    json({ version: '0.3.0', name: 'multi-pi', dependencies: [] }),
+  );
+  const zenFile = 'plugins/multi-zen/.claude-plugin/plugin.json';
+  const zen = JSON.parse(await readFile(path.join(root, zenFile), 'utf8')) as {
+    dependencies: Array<Record<string, unknown>>;
+  };
+  zen.dependencies.push({ name: 'multi-pi', version: '~0.2.0' });
+  await writeFile(path.join(root, zenFile), json(zen));
+
+  await release(root, { version: '0.4.0', date: '2026-10-28', summary: 'Next' });
+
+  const released = (await readJson(root, zenFile)) as {
+    dependencies: Array<Record<string, unknown>>;
+  };
+  assert.deepEqual(released.dependencies, [
+    { name: 'multi-core', version: '~0.4.0' },
+    { name: 'someone-else', version: '~0.3.0' },
+    { name: 'multi-pi', version: '~0.2.0' },
+  ]);
+});
+
 test('the consistency check requires a summary line for the current release', async (t) => {
   const root = await fixture(t);
   await writeFile(

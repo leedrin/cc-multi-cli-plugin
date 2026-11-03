@@ -211,11 +211,38 @@ async function loadManifests(root: string): Promise<LoadedManifest[]> {
 }
 
 function ownPluginNames(manifests: LoadedManifest[]): Set<string> {
-  const plugins = manifests.find((manifest) => manifest.kind === 'marketplace')?.json.plugins;
-  if (!Array.isArray(plugins)) {
-    return new Set();
+  const marketplacePlugins = manifests.find((manifest) => manifest.kind === 'marketplace')?.json
+    .plugins;
+  return new Set(
+    Array.isArray(marketplacePlugins)
+      ? marketplacePlugins.filter(isRecord).map((plugin) => String(plugin.name))
+      : [],
+  );
+}
+
+function discoveredPluginNames(manifests: LoadedManifest[]): Set<string> {
+  const names = ownPluginNames(manifests);
+  for (const manifest of manifests.filter((item) => item.kind === 'plugin')) {
+    if (manifest.file.startsWith('plugins/')) {
+      names.add(path.posix.basename(path.posix.dirname(path.posix.dirname(manifest.file))));
+    }
   }
-  return new Set(plugins.filter(isRecord).map((plugin) => String(plugin.name)));
+  return names;
+}
+
+function missingMarketplacePlugins(manifests: LoadedManifest[]): string[] {
+  const marketplacePlugins = manifests.find((manifest) => manifest.kind === 'marketplace')?.json
+    .plugins;
+  const listed = new Set(
+    Array.isArray(marketplacePlugins)
+      ? marketplacePlugins.filter(isRecord).map((plugin) => String(plugin.name))
+      : [],
+  );
+  return manifests
+    .filter((manifest) => manifest.kind === 'plugin' && manifest.file.startsWith('plugins/'))
+    .map((manifest) => path.posix.basename(path.posix.dirname(path.posix.dirname(manifest.file))))
+    .filter((name) => !listed.has(name))
+    .map((name) => `.claude-plugin/marketplace.json: plugins[${name}] is missing`);
 }
 
 function packageVersion(manifests: LoadedManifest[]): string {
@@ -266,8 +293,8 @@ export async function checkVersions(root: string): Promise<string[]> {
   if (!isVersion(version)) {
     return [`package.json: version ${version} is not a semantic version`];
   }
-  const own = ownPluginNames(manifests);
-  const problems: string[] = [];
+  const own = discoveredPluginNames(manifests);
+  const problems: string[] = missingMarketplacePlugins(manifests);
   for (const manifest of manifests) {
     for (const item of versionFields(manifest.kind, manifest.json, own)) {
       const want = expected(version, item.pin);
