@@ -732,6 +732,12 @@ Strata 是维护者写在本地 Pi 配置里的自定义 provider，不在 `pi-a
 
 S1 和 S3 需要实际运行下载的 Pi 代码。它们是 P0 的一部分，批准本设计即视为批准，运行时用假 key、不联网。
 
+### 18.1 实验结论
+
+**S1 — 通过。** 使用 `@earendil-works/pi-ai@1.4.0` 的真实 `deepseekProvider` 和其 `openai-completions` stream 实现，在 `fetch` 选项中注入录制 SSE，假 key 仅在本地实验脚本中使用，并将 `globalThis.fetch` 替换为调用即抛错的桩；两次请求均未访问网络。第一轮观察到的事件序列：`start → thinking_start → thinking_delta → text_start → text_delta → toolcall_start → toolcall_delta → thinking_end → text_end → toolcall_end → done`。`onProviderStreamEvent` 看到了原始 usage chunk（含 `prompt_cache_hit_tokens`）；第二轮请求体中的 thinking 字段为 `reasoning_content`，且包含第一轮 reasoning 内容。离线流通与 thinking 往返判据均成立。
+
+**S3 — 通过（记录测量值）。** 在独立忽略目录安装该精确版本；测量整个 `node_modules` 普通文件为 69,622,276 字节，包含 98 个 `package.json`（依赖包数），安装报告新增 87 个包。Node `v24.22.1`。原先 5 个独立 Node 进程只导入 `@earendil-works/pi-ai/providers/deepseek` 的结果为 31.152 ms 中位数（单次：45.402、25.496、31.152、68.037、22.550 ms），仅代表 provider 入口导入，不含懒加载的 stream 实现。补测中 5 个独立冷启动进程均导入该 provider 并调用 `stream`，计时从 import 前至收到真实 `openai-completions` 实现处理录制 SSE 后的首个 `start` 事件；含 provider 与懒加载 stream 实现及其依赖的导入、请求设置和首事件解析，但不含 Node 进程启动和首事件之后的流处理。每次均使用注入的离线 fetch、假 key，并将 `globalThis.fetch` 设为抛错桩。加载至首事件耗时中位数为 944.815 ms（单次：1006.011、3230.313、742.725、944.815、454.730 ms）。
+
 ---
 
 # 19. 测试矩阵
