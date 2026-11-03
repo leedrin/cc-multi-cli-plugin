@@ -8,7 +8,7 @@ test('provider prefixes decide routing, review ownership and harness execution i
   assert.equal(providerRoute('multi/cursor/auto'), 'cursor');
   assert.equal(providerRoute('multi/zen/glm'), 'zen');
   assert.equal(providerRoute('multi/openai/gpt-6-luna'), 'openai');
-  assert.equal(providerRoute('multi/unknown/x'), 'openai');
+  assert.throws(() => providerRoute('multi/unknown/x'), /Unknown provider/);
   assert.equal(harnessProvider('multi/grok/x'), 'grok');
   assert.equal(harnessProvider('multi/openai/x'), undefined);
   assert.equal(harnessProvider(undefined), undefined);

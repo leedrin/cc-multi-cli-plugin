@@ -6,6 +6,13 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for current direction and
 
 ## Unreleased
 
+- **BREAKING: Unknown `multi/<provider>/` models are rejected.** These models used
+  to be silently sent to OpenAI; the gateway now returns HTTP 400 BadRequest and
+  does not call an upstream when the provider is unknown.
+- **BREAKING: Gateway event and prepared-request `route` fields are plain strings.**
+  `GatewayEvent.route` and `PreparedRequest.route` are no longer restricted to
+  provider-specific unions.
+
 - **Document Windows PowerShell installation troubleshooting.** The Usage branch
   installation guide covers the profile-path workaround, execution policy errors,
   explicit `.cmd` launch commands, and updating the local plugin cache.

@@ -1300,6 +1300,24 @@ test('provider enablement gates on the decoded provider identity with unchanged 
   assert.match(await response.text(), /This provider plugin is not enabled for this session\./);
 });
 
+test('unknown provider models are rejected before any upstream call', async (t) => {
+  let upstreamCalls = 0;
+  const call = await gateway(t, async () => {
+    upstreamCalls++;
+    return new Response(sse(textEvents));
+  });
+  const response = await call({ ...body, model: 'multi/unknown/x' });
+  const failure = (await response.json()) as {
+    type: string;
+    error: { type: string; message: string };
+  };
+  assert.equal(response.status, 400);
+  assert.equal(failure.type, 'error');
+  assert.equal(failure.error.type, 'invalid_request_error');
+  assert.match(failure.error.message, /unknown/);
+  assert.equal(upstreamCalls, 0);
+});
+
 test('provider routing sends each external model to one handler route', async (t) => {
   const session = 'routing-session';
   const modes = await harnessPermissionModes(session);

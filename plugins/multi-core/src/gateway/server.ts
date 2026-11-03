@@ -52,12 +52,14 @@ import { decodeModelRoute } from './model-identity.ts';
 import { type NativeHarness, nativeHarnessErrorStatus } from './native-harness.ts';
 import {
   autoReviewPolicy,
+  classifyModelRoute,
   type HarnessProvider,
   harnessEndpoint,
   harnessProvider,
   harnessUnavailable,
   isHarnessProvider,
   providerRoute,
+  UnknownProviderError,
 } from './provider.ts';
 import type { PreparedRequest } from './provider-request.ts';
 import { ProviderAuthError, UpstreamFailure } from './provider-request.ts';
@@ -102,16 +104,7 @@ const STRIPPED_RESPONSE_HEADERS = [
 
 /** What the gateway reports to `onEvent`; routing only, never credentials or bodies. */
 export interface GatewayEvent {
-  route:
-    | 'anthropic'
-    | 'openai'
-    | 'openai-request'
-    | 'cursor'
-    | 'antigravity'
-    | 'grok'
-    | 'review'
-    | 'zen'
-    | 'zen-request';
+  route: string;
   model?: string;
   agentId?: string | null;
   path?: string;
@@ -845,10 +838,11 @@ export function createNativeGateway({
         workerModels.forgetSession(session);
       },
       reviewStatement: (model) => {
-        const provider = providerRoute(model);
-        return provider === 'anthropic'
-          ? undefined
-          : autoReviewPolicy(provider, Boolean(reviewers.openai)).statement;
+        const classification = classifyModelRoute(model);
+        if (classification.kind !== 'provider' || classification.route === 'anthropic') {
+          return undefined;
+        }
+        return autoReviewPolicy(classification.route, Boolean(reviewers.openai)).statement;
       },
       permissionModes,
       compactions,
@@ -1166,7 +1160,7 @@ function errorStatus(error: unknown): number {
   if (error instanceof ProviderAuthError) {
     return 401;
   }
-  if (error instanceof BadRequest) {
+  if (error instanceof BadRequest || error instanceof UnknownProviderError) {
     return 400;
   }
   if (error instanceof FollowUpRefused || error instanceof ForbiddenHost) {
@@ -1344,7 +1338,13 @@ function failResponse(res: http.ServerResponse, emit: TerminalEmit, error: unkno
 
 /** The failure as an ordinary assistant message: it states the failure and claims no work. */
 export function failureMessage(error: unknown, model: string): MessagesResponse {
-  const provider = providerRoute(model);
+  const classification = classifyModelRoute(model);
+  let provider = 'anthropic';
+  if (classification.kind === 'provider') {
+    provider = classification.route;
+  } else if (classification.kind === 'unknown') {
+    provider = `unknown provider ${classification.provider}`;
+  }
   const detail = latchSafe(reason(error)).replace(/\s+/g, ' ').trim().slice(0, 500);
   return {
     id: `msg_${randomUUID()}`,
@@ -1359,6 +1359,10 @@ export function failureMessage(error: unknown, model: string): MessagesResponse 
 }
 
 function assertProviderEnabled(model: string | null, enabled: readonly string[] | undefined) {
+  const classification = classifyModelRoute(model);
+  if (classification.kind === 'unknown') {
+    throw new BadRequest(`Unknown provider "${classification.provider}".`);
+  }
   const provider = model ? decodeModelRoute(model)?.providerId : undefined;
   if (model && enabled && !enabled.includes(provider ?? '')) {
     throw new BadRequest('This provider plugin is not enabled for this session.');

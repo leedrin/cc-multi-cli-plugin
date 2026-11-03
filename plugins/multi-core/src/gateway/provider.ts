@@ -1,6 +1,8 @@
 // The one place that reads a model ID's provider prefix. Every routing, review,
 // signal and execution decision derives from `providerOf`.
 
+import { decodeModelRoute } from './model-identity.ts';
+
 const HARNESS_PROVIDERS = ['cursor', 'antigravity', 'grok'] as const;
 export type HarnessProvider = (typeof HARNESS_PROVIDERS)[number];
 export type ProviderName = HarnessProvider | 'openai' | 'zen';
@@ -26,9 +28,43 @@ export function harnessProvider(model: unknown): HarnessProvider | undefined {
   return isHarnessProvider(provider) ? provider : undefined;
 }
 
-/** An external model with an unrecognized prefix still routes to OpenAI; no model is Claude's. */
+export class UnknownProviderError extends Error {
+  readonly provider: string;
+
+  constructor(provider: string) {
+    super(`Unknown provider "${provider}".`);
+    this.provider = provider;
+    this.name = 'UnknownProviderError';
+  }
+}
+
+export type ModelRouteClassification =
+  | { kind: 'anthropic' }
+  | { kind: 'provider'; route: ProviderRoute }
+  | { kind: 'unknown'; provider: string };
+
+/** Classify a model without throwing, including unknown encoded provider IDs. */
+export function classifyModelRoute(model: string | null | undefined): ModelRouteClassification {
+  if (!model) {
+    return { kind: 'anthropic' };
+  }
+  const known = providerOf(model);
+  if (known) {
+    return { kind: 'provider', route: known };
+  }
+  const identity = decodeModelRoute(model);
+  return identity
+    ? { kind: 'unknown', provider: identity.providerId }
+    : { kind: 'provider', route: 'openai' };
+}
+
+/** Route recognized provider models; unknown encoded providers are never sent to OpenAI. */
 export function providerRoute(model: string | null | undefined): ProviderRoute {
-  return providerOf(model) ?? (model ? 'openai' : 'anthropic');
+  const classification = classifyModelRoute(model);
+  if (classification.kind === 'unknown') {
+    throw new UnknownProviderError(classification.provider);
+  }
+  return classification.kind === 'provider' ? classification.route : 'anthropic';
 }
 
 /** Claude's context tag is display metadata, never part of a native model ID. */
