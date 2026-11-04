@@ -43,6 +43,43 @@ export interface ProviderRequestInput {
   agentId?: string;
 }
 
+export type UpstreamOpen =
+  | { ok: false; status: number; retryAfter: string | null }
+  | {
+      ok: true;
+      translate(
+        emit: Emit | undefined,
+        rememberWorkerModel: RememberWorkerModel,
+      ): Promise<MessagesResponse>;
+    };
+
+export async function httpUpstream(
+  send: () => Promise<Response>,
+  translate: (
+    body: ReadableStream<Uint8Array>,
+    emit: Emit | undefined,
+    rememberWorkerModel: RememberWorkerModel,
+  ) => Promise<MessagesResponse>,
+): Promise<UpstreamOpen> {
+  const response = await send();
+  if (!response.ok) {
+    await response.body?.cancel();
+    return {
+      ok: false,
+      status: response.status,
+      retryAfter: response.headers.get('retry-after'),
+    };
+  }
+  const body = response.body;
+  if (!body) {
+    throw new Error('Upstream response has no body');
+  }
+  return {
+    ok: true,
+    translate: (emit, rememberWorkerModel) => translate(body, emit, rememberWorkerModel),
+  };
+}
+
 export interface PreparedRequest {
   /** How failures name the provider. */
   label: string;
@@ -57,6 +94,7 @@ export interface PreparedRequest {
   completion?: { model: string; effort?: string };
   requestEvent(agentId?: string): ProviderEvent;
   failureEvent(status: number, agentId?: string): ProviderEvent;
+  open?(signal: AbortSignal, fetchImpl: GatewayFetch): Promise<UpstreamOpen>;
   send(signal: AbortSignal, fetchImpl: GatewayFetch): Promise<Response>;
   translate(
     stream: ReadableStream<Uint8Array>,
