@@ -16,12 +16,12 @@
 - [x] 2.1 MP-0101：新增 `gw/model-identity.ts`（`encodeModelRoute`、`decodeModelRoute`），新增 `test/unit/native-model-identity.test.ts` 覆盖往返恒等、旧 ID 不变、连字符、`.`、`%2F`、`%40`、`[1m]` 在编码外、Cursor 预设，以及 `multi//x`、`multi/core/x`、大写、超长被拒绝
 - [x] 2.2 MP-0102：把 `core/launcher.ts:780`、`gw/server.ts:1361`、`plugins/multi-cursor/src/models.ts:111`、`plugins/multi-zen/src/chat.ts:183`、`plugins/multi-zen/src/request.ts:36`、`hooks/worker-rows.ts:46` 改用 `decodeModelRoute`；`grep -n "split('/')"` 在这些文件中不再命中路由解析；`npm run test:mod` 通过
 - [x] 2.3 MP-0103：`gw/worker-catalog.ts` 的 `parseProviderModel` 放宽 `[a-z]+`、`byProvider` 不再用 `includes('/')` 丢弃嵌套 ID；扩展 `native-worker-catalog.test.ts`：嵌套 ID 保留、Cursor 预设仍排除、`multi-zai-coding-cn` 可解析
-- [ ] 2.4 `providerRoute` 对未知 provider 改为 BadRequest，未启用 provider 返回明确错误；只修改 `test/unit/gateway-provider-bounded.test.ts:11` 一处既有断言；第 1 组快照除此之外不变
-- [ ] 2.5 `GatewayEvent.route`、`PreparedRequest.route` 放宽为 `string`；`CHANGELOG.md` 的 `## Unreleased` 写入两条破坏性改动（DD §20）
+- [x] 2.4 `providerRoute` 对未知 provider 改为 BadRequest，未启用 provider 返回明确错误；只修改 `test/unit/gateway-provider-bounded.test.ts:11` 一处既有断言；第 1 组快照除此之外不变
+- [x] 2.5 `GatewayEvent.route`、`PreparedRequest.route` 放宽为 `string`；`CHANGELOG.md` 的 `## Unreleased` 写入两条破坏性改动（DD §20）
 
 ## 3. P2 ProviderRegistry（MP-0201–0203、DD §7）
 
-- [ ] 3.1 MP-0201：新增 host-free 的 `gw/provider-facts.ts`（`PROVIDER_FACTS`），`hooks/provider.ts` 与 `gw/provider-workers.ts` 改为读取它；断言 `hooks/` 不 import `src/` 的宿主模块，`npm run test:mod` 通过
+- [x] 3.1 MP-0201：新增 host-free 的 `gw/provider-facts.ts`（`PROVIDER_FACTS`），`hooks/provider.ts` 与 `gw/provider-workers.ts` 改为读取它；断言 `hooks/` 不 import `src/` 的宿主模块，`npm run test:mod` 通过
 - [ ] 3.2 MP-0202：新增 `gw/provider-registry.ts`（`ProviderDescriptor`、注册校验、`ProviderRuntime`）；新增 `test/unit/native-provider-registry.test.ts` 覆盖重复 ID、非法 ID、保留 ID、kind 与 adapter 不匹配报错，事实表与描述符一致，构建 < 100 ms
 - [ ] 3.3 MP-0203：OpenAI、Zen、Cursor、Antigravity、Grok 各在 `src/provider.ts` 提供描述符（auto-review 策略、签名前缀、worker 信息）；`gw/provider.ts` 的 `PROVIDERS`、`PROVIDER_AUTO_REVIEW` 和 `gw/server.ts:76` 的 `FOREIGN_SIGNATURE_PREFIXES` 改由 Registry 汇总；`native-verdicts`、`native-reviewer-discovery` 测试断言不变
 - [ ] 3.4 fake provider 测试：只加一个描述符和一行事实，就出现在 picker、worker 和 usage 中，且未修改 gateway 核心文件
