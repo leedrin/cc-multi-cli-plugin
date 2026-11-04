@@ -1,21 +1,29 @@
 // The one place that reads a model ID's provider prefix. Every routing, review,
 // signal and execution decision derives from `providerOf`.
 
+import { BUILTIN_PROVIDERS } from './builtin-providers.ts';
 import { decodeModelRoute } from './model-identity.ts';
 
-const HARNESS_PROVIDERS = ['cursor', 'antigravity', 'grok'] as const;
-export type HarnessProvider = (typeof HARNESS_PROVIDERS)[number];
+export type HarnessProvider = 'cursor' | 'antigravity' | 'grok';
 export type ProviderName = HarnessProvider | 'openai' | 'zen';
 export type ProviderRoute = ProviderName | 'anthropic';
 
-const PROVIDERS: readonly ProviderName[] = [...HARNESS_PROVIDERS, 'openai', 'zen'];
+function builtinProviders() {
+  return BUILTIN_PROVIDERS;
+}
+
+function providerNames(): readonly ProviderName[] {
+  return builtinProviders().map(({ id }) => id) as readonly ProviderName[];
+}
+
+const HARNESS_PROVIDERS: readonly HarnessProvider[] = ['cursor', 'antigravity', 'grok'];
 
 /** The provider whose `multi/<provider>/` prefix the model carries, if any. */
 function providerOf(model: unknown): ProviderName | undefined {
   if (typeof model !== 'string') {
     return undefined;
   }
-  return PROVIDERS.find((provider) => model.startsWith(`multi/${provider}/`));
+  return providerNames().find((provider) => model.startsWith(`multi/${provider}/`));
 }
 
 export function isHarnessProvider(provider: string | undefined): provider is HarnessProvider {
@@ -78,22 +86,43 @@ export function harnessEndpoint(provider: HarnessProvider): string {
 }
 
 /** What a request for a harness the gateway does not run is told. */
+function builtinProvider(id: ProviderName) {
+  const descriptor = builtinProviders().find((provider) => provider.id === id);
+  if (!descriptor) {
+    throw new Error(`Missing built-in provider descriptor: ${id}`);
+  }
+  return descriptor;
+}
+
 export const harnessUnavailable: Record<HarnessProvider, string> = {
-  cursor: 'Cursor SDK is not signed in. Run the launcher with --cursor-login first.',
-  antigravity: 'Antigravity is unavailable. Install and connect the multi-antigravity plugin.',
-  grok: 'Grok is unavailable. Install Grok Build, run grok login, and relaunch.',
+  get cursor() {
+    return builtinProvider('cursor').unavailableMessage;
+  },
+  get antigravity() {
+    return builtinProvider('antigravity').unavailableMessage;
+  },
+  get grok() {
+    return builtinProvider('grok').unavailableMessage;
+  },
 };
 
 export type AutoReviewPolicy = { review: 'reviewer' | 'harness' | 'none'; statement: string };
 export const PROVIDER_AUTO_REVIEW: Record<ProviderName, AutoReviewPolicy> = {
-  openai: { review: 'reviewer', statement: 'reviewed by the OpenAI account reviewer' },
-  cursor: {
-    review: 'harness',
-    statement: 'Cursor reviews its own actions natively and fails open',
+  get openai() {
+    return builtinProvider('openai').autoReview;
   },
-  zen: { review: 'none', statement: 'no auto mode: actions run unreviewed' },
-  antigravity: { review: 'none', statement: 'no auto mode: actions run unreviewed' },
-  grok: { review: 'none', statement: 'no auto mode: actions run unreviewed' },
+  get zen() {
+    return builtinProvider('zen').autoReview;
+  },
+  get cursor() {
+    return builtinProvider('cursor').autoReview;
+  },
+  get antigravity() {
+    return builtinProvider('antigravity').autoReview;
+  },
+  get grok() {
+    return builtinProvider('grok').autoReview;
+  },
 };
 
 export function autoReviewPolicy(

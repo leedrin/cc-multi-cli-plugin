@@ -3,17 +3,11 @@ import type { Server } from 'node:http';
 import http from 'node:http';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import {
-  openaiSignaturePrefixes,
-  prepareOpenAIRequest,
-} from '../../../multi-openai/src/gateway-request.ts';
+import { prepareOpenAIRequest } from '../../../multi-openai/src/gateway-request.ts';
 import { validateZenKey } from '../../../multi-zen/src/auth.ts';
-import {
-  prepareZenRequest,
-  zenSignaturePrefixes,
-  zenUnavailable,
-} from '../../../multi-zen/src/gateway-request.ts';
+import { prepareZenRequest, zenUnavailable } from '../../../multi-zen/src/gateway-request.ts';
 import { setBounded } from './bounded.ts';
+import { createBuiltinRegistry } from './builtin-providers.ts';
 import {
   DisplayRows,
   displayFollowUp,
@@ -56,11 +50,11 @@ import {
   type HarnessProvider,
   harnessEndpoint,
   harnessProvider,
-  harnessUnavailable,
   isHarnessProvider,
   providerRoute,
   UnknownProviderError,
 } from './provider.ts';
+import type { ProviderRegistry } from './provider-registry.ts';
 import type { PreparedRequest } from './provider-request.ts';
 import { ProviderAuthError, UpstreamFailure } from './provider-request.ts';
 import { ProviderUsageDashboard, type ProviderUsageReader } from './provider-usage.ts';
@@ -75,8 +69,6 @@ import {
   WorkerModels,
 } from './worker-models.ts';
 
-/** Other providers' reasoning signatures mean nothing to Anthropic and are stripped. */
-const FOREIGN_SIGNATURE_PREFIXES = [...openaiSignaturePrefixes, ...zenSignaturePrefixes];
 const DEFAULT_ANTHROPIC_URL = 'https://api.anthropic.com';
 // Anthropic's own Messages API limit is 32 MB; the gateway buffers up to it and leaves
 // the verdict to the provider, so a request Claude Code could send natively still goes.
@@ -156,6 +148,7 @@ export interface GatewayOptions {
   /** Display rows for native harness actions; the native tool names each harness is known to have. */
   displayRows?: DisplayRows;
   displayTools?: Partial<Record<'cursor' | 'antigravity' | 'grok', readonly string[]>>;
+  registry?: ProviderRegistry;
 }
 
 /** Rejected before any provider call; answered as HTTP 400 rather than 502. */
@@ -214,6 +207,7 @@ export function createNativeGateway({
   usageDashboard,
   billedUsage,
   usageReaders = {},
+  registry = createBuiltinRegistry(),
 }: GatewayOptions): Server {
   const dashboard =
     usageDashboard ??
@@ -361,7 +355,13 @@ export function createNativeGateway({
     const { res, body, url, signal, agentId, emit, identity } = exchange;
     const bridge = harnesses[provider];
     if (!bridge) {
-      throw refuseHarness(exchange, provider, new BadRequest(harnessUnavailable[provider]));
+      throw refuseHarness(
+        exchange,
+        provider,
+        new BadRequest(
+          registry.get(provider)?.unavailableMessage ?? 'Harness provider unavailable.',
+        ),
+      );
     }
     const scope = harnessScope(exchange);
     let inputTokens: number;
@@ -648,7 +648,7 @@ export function createNativeGateway({
   async function handleAnthropic(exchange: ProviderRequest) {
     const { req, res, body, url, raw, signal } = exchange;
     const headers = anthropicHeaders(req);
-    const cleaned = forAnthropic(body, FOREIGN_SIGNATURE_PREFIXES);
+    const cleaned = forAnthropic(body, registry.signaturePrefixes());
     let forwarded: Buffer | undefined;
     if (req.method === 'POST') {
       forwarded = cleaned === body ? raw : Buffer.from(JSON.stringify(cleaned));

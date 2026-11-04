@@ -4,20 +4,20 @@ import type { AutoReviewPolicy } from './provider.ts';
 import { PROVIDER_FACTS } from './provider-facts.ts';
 import type { PreparedRequest, ProviderRequestInput } from './provider-request.ts';
 
-export type ProviderKind = 'direct' | 'harness';
+type ProviderKind = 'direct' | 'harness';
 
-export interface ProviderAvailability {
+interface ProviderAvailability {
   available: boolean;
   reason?: string;
 }
 
-export interface ProviderDiscoveryContext {
+interface ProviderDiscoveryContext {
   cwd: string;
   env: NodeJS.ProcessEnv;
   signal?: AbortSignal;
 }
 
-export type ModelProtocol =
+type ModelProtocol =
   | 'openai-responses'
   | 'openai-chat'
   | 'anthropic-messages'
@@ -25,7 +25,7 @@ export type ModelProtocol =
   | 'native-harness'
   | 'custom';
 
-export interface ModelCapabilities {
+interface ModelCapabilities {
   text: boolean;
   streaming?: boolean;
   images?: boolean;
@@ -55,13 +55,13 @@ export interface ModelDescriptor {
   metadata?: Readonly<Record<string, unknown>>;
 }
 
-export type NativeHarnessFactoryContext = ProviderDiscoveryContext;
+type NativeHarnessFactoryContext = ProviderDiscoveryContext;
 
-export interface ProviderUsageReader {
+interface ProviderUsageReader {
   read(...args: never[]): unknown;
 }
 
-export interface DirectProviderAdapter {
+interface DirectProviderAdapter {
   prepare(input: ProviderRequestInput): PreparedRequest;
   signaturePrefixes: readonly string[];
 }
