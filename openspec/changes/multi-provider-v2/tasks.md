@@ -6,9 +6,9 @@
 
 - [x] 1.1 MP-0003：新增特征快照测试 `test/unit/native-provider-snapshot.test.ts`，覆盖真实 picker 行、权限断言、`%2F` 编码、连字符 provider、Cursor 预设和 `[1m]`；在未改动的代码上运行 `npm test` 通过
 - [x] 1.2 S1：在 scratchpad 用假 key 和录制的 SSE，通过 injected fetch 离线跑真实 `deepseekProvider` + `openai-completions`，确认 `start → thinking/text/toolcall → done`、`onProviderStreamEvent` 可见 usage、thinking 可往返；结论写入 DD §18。失败则停止第 6–9 组并重新评估（实验代码不进仓库，不联网）
-- [ ] 1.3 S2：运行 `npm run test:mod` 并做一次无推理的真实 Claude 启动，确认 `[1m]` 与已保存选择的行为；结论写入 DD §18
+- [x] 1.3 S2：运行 `npm run test:mod` 并做一次无推理的真实 Claude 启动，确认 `[1m]` 与已保存选择的行为；结论写入 DD §18
 - [x] 1.4 S3：在 scratchpad 里 `npm i --ignore-scripts @earendil-works/pi-ai@1.4.0`，测量磁盘增量和 `import` 耗时；结论写入 DD §18
-- [ ] 1.5 S4：让 Claude Code 指向本地假上游，只记录字段名、类型和 effort 枚举值（不记内容），确认 `stop_sequences`、`tool_choice`、`tool_reference`、`cache_control`、temperature、默认 `output_config.effort` 和 `thinking`；必要时调整 DD §12.3/§12.4，结论写入 DD §18
+- [x] 1.5 S4：让 Claude Code 指向本地假上游，只记录字段名、类型和 effort 枚举值（不记内容），确认 `stop_sequences`、`tool_choice`、`tool_reference`、`cache_control`、temperature、默认 `output_config.effort` 和 `thinking`；必要时调整 DD §12.3/§12.4，结论写入 DD §18
 - [x] 1.6 按 DD §23 修订 PRD，确认每条修订都有对应位置；`npm run check` 通过
 
 ## 2. P1 ModelIdentity（MP-0101–0103、DD §6）
@@ -22,7 +22,7 @@
 ## 3. P2 ProviderRegistry（MP-0201–0203、DD §7）
 
 - [x] 3.1 MP-0201：新增 host-free 的 `gw/provider-facts.ts`（`PROVIDER_FACTS`），`hooks/provider.ts` 与 `gw/provider-workers.ts` 改为读取它；断言 `hooks/` 不 import `src/` 的宿主模块，`npm run test:mod` 通过
-- [ ] 3.2 MP-0202：新增 `gw/provider-registry.ts`（`ProviderDescriptor`、注册校验、`ProviderRuntime`）；新增 `test/unit/native-provider-registry.test.ts` 覆盖重复 ID、非法 ID、保留 ID、kind 与 adapter 不匹配报错，事实表与描述符一致，构建 < 100 ms
+- [x] 3.2 MP-0202：新增 `gw/provider-registry.ts`（`ProviderDescriptor`、注册校验、`ProviderRuntime`）；新增 `test/unit/native-provider-registry.test.ts` 覆盖重复 ID、非法 ID、保留 ID、kind 与 adapter 不匹配报错，事实表与描述符一致，构建 < 100 ms
 - [ ] 3.3 MP-0203：OpenAI、Zen、Cursor、Antigravity、Grok 各在 `src/provider.ts` 提供描述符（auto-review 策略、签名前缀、worker 信息）；`gw/provider.ts` 的 `PROVIDERS`、`PROVIDER_AUTO_REVIEW` 和 `gw/server.ts:76` 的 `FOREIGN_SIGNATURE_PREFIXES` 改由 Registry 汇总；`native-verdicts`、`native-reviewer-discovery` 测试断言不变
 - [ ] 3.4 fake provider 测试：只加一个描述符和一行事实，就出现在 picker、worker 和 usage 中，且未修改 gateway 核心文件
 - [ ] 3.5 插件启用按插件 ID 判断（`core/install/plugins.ts`、`core/install/bootstrap.ts`、`core/account.ts:66`）；扩展 `native-install.test.ts`
@@ -49,7 +49,7 @@
 
 - [ ] 6.1 MP-0601：在根 `package.json` 精确 pin `@earendil-works/pi-ai@1.4.0`；新建 `plugins/multi-pi/`（插件清单、`src/provider.ts` 描述符，不 import `pi-ai`）；`npm ci` 与 `npm run check:versions` 通过
 - [ ] 6.2 MP-0606：`gw/` 新增 `takeProviderCredentials(env, descriptors)`，接受显式 `platform`；在创建子进程之前调用并删除 `process.env` 上的条目；单测覆盖只读环境变量、读取后删除、未启用时不删除、不访问 `~/.pi`、Windows 分支
-- [ ] 6.3 `src/catalog.ts`：首批 DeepSeek 模型的严格白名单，只放行 `openai-completions`；`MULTI_PI_MODELS` 含白名单外 ID 时报错；支持的 effort 与默认 effort（null 级别、缺失键报错，缺省 `high`，`thinking: disabled`）；单测通过
+- [ ] 6.3 `src/catalog.ts`：首批 DeepSeek 模型的严格白名单，只放行 `openai-completions`；`MULTI_PI_MODELS` 含白名单外 ID 时报错；支持的 effort 与默认 effort（null 级别、缺失键就近映射到支持档位，按 low < medium < high < xhigh < max、等距取高，响应提示一次实际档位；缺省 `high`，`thinking: disabled`）；单测通过
 - [ ] 6.4 `src/backend.ts`：懒加载（代码旁注明 AGENTS.md 直接 import 规则的例外理由），只 import `providers/deepseek`；显式 `cacheRetention: 'short'`、`maxRetries: 0`、`redirect: 'error'`、单一上游主机；`open` 等待首个事件。单测：无 key 启动未 import `pi-ai`，`PI_CACHE_RETENTION=long` 时请求字节不变
 - [ ] 6.5 MP-0602：`src/messages.ts` 与 `src/signature.ts`：请求转换（DD §12.3 每行）、`max_tokens` 范围、`tool_choice`、工具名别名复用 `gw/tools.ts`、`multipi:v1:` 签名往返与相邻 thinking 合并、BadRequest 路径、字节稳定；单测覆盖 spec `pi-message-translation` 的请求侧场景
 - [ ] 6.6 MP-0603：`src/stream.ts`：按 delta 生成块、签名在关闭时发出、`thinking_end` 改写签名时失败、工具调用完整后才发出并 `stripWorkerModel`、`argumentsError` 显式失败（金丝雀断言）、停止原因映射、未支持签名字段失败、错误不含响应体；用真实事件顺序 fixture 离线通过
@@ -67,7 +67,7 @@
 ## 8. P5c Strata（DD §16.1）
 
 - [ ] 8.1 用 `createProvider` 定义 Strata，地址和 key 来自 Multi 的环境变量；非回环 `http://` 与非法 URL 报错；缺地址时不出现在 picker 和 worker；回环地址无 key 发送占位值，非回环无 key 报错；不读 `~/.pi/agent/models.json`；单测通过
-- [ ] 8.2 Strata 模型无 effort，带 effort 的请求报错；usage 走第 6.7 项的规则；fixture 离线通过
+- [ ] 8.2 Strata 模型无 effort，带 effort 的请求丢弃 effort 并提示一次；usage 走第 6.7 项的规则；fixture 离线通过
 - [ ] 8.3 更新 `docs/pi.md` 的 Strata 配置与 `CHANGELOG.md`；`npm run check` 通过
 
 ## 9. P6 Live 验收（需用户批准）

@@ -51,6 +51,6 @@ export function decodeModelRoute(route: string): ModelIdentity | undefined {
   };
 }
 
-function isProviderId(providerId: string): boolean {
+export function isProviderId(providerId: string): boolean {
   return PROVIDER_ID.test(providerId) && providerId !== 'core';
 }
