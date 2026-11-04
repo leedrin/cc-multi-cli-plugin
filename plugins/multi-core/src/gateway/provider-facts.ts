@@ -24,6 +24,16 @@ export const PROVIDER_FACTS = [
   { id: 'strata', plugin: 'pi', kind: 'direct', worker: 'multi-strata', label: 'Strata' },
 ] as const;
 
+export type ProviderId = (typeof PROVIDER_FACTS)[number]['id'];
+
+export function providerPluginIds(): string[] {
+  return [...new Set(PROVIDER_FACTS.map((fact) => fact.plugin))];
+}
+
+export function providersForPlugin(plugin: string): ProviderId[] {
+  return PROVIDER_FACTS.filter((fact) => fact.plugin === plugin).map((fact) => fact.id);
+}
+
 export function isProviderWorker(type: unknown): boolean {
   return typeof type === 'string' && PROVIDER_FACTS.some((fact) => fact.worker === type);
 }

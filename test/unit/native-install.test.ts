@@ -150,9 +150,68 @@ function plugins(root: string, zen = true) {
   ];
 }
 
+// Keep these expectations independent of PROVIDER_FACTS so missing facts cannot hide regressions.
+const existingPluginIds = ['openai', 'zen', 'cursor', 'antigravity', 'grok'] as const;
+
+for (const plugin of existingPluginIds) {
+  test(`${plugin} remains a valid plugin selection with its original route provider`, () => {
+    assert.deepEqual(providerSelection(plugin), [plugin]);
+  });
+
+  test(`${plugin} passes through bootstrap only while its installed plugin is enabled`, async (t) => {
+    const f = await fixture(t);
+    await f.install();
+    const root = await core(f.directory, 'core');
+    const entries = [
+      { id: `multi-core@${marketplace}`, enabled: true, scope: 'user', installPath: root },
+      {
+        id: `multi-${plugin}@${marketplace}`,
+        enabled: true,
+        scope: 'user',
+        installPath: path.join(root, plugin),
+      },
+    ];
+    await writeFile(f.listing, JSON.stringify(entries));
+    const launched = JSON.parse((await f.invoke('claude-multi', [])).stdout);
+    assert.equal(launched.providers, plugin);
+    assert.deepEqual(providerSelection(launched.providers), [plugin]);
+    entries[1].enabled = false;
+    await writeFile(f.listing, JSON.stringify(entries));
+    assert.deepEqual(JSON.parse((await f.invoke('claude-multi', [])).stdout), {
+      native: true,
+      args: [],
+    });
+  });
+}
+
+test('installed plugin IDs pass through bootstrap and include multi-pi', async (t) => {
+  const f = await fixture(t);
+  await f.install();
+  const root = await core(f.directory, 'core');
+  const entries = plugins(root);
+  entries.push({
+    id: `multi-pi@${marketplace}`,
+    enabled: true,
+    scope: 'user',
+    installPath: path.join(root, 'pi'),
+  });
+  await writeFile(f.listing, JSON.stringify(entries));
+  const launched = JSON.parse((await f.invoke('claude-multi', [])).stdout);
+  assert.equal(launched.providers, 'zen,pi');
+  assert.deepEqual(providerSelection(launched.providers), [
+    'zen',
+    'deepseek',
+    'zai',
+    'zai-coding-cn',
+    'strata',
+  ]);
+});
+
 test('setup preserves shell content, is repeatable, and uninstall survives plugin removal', async (t) => {
   const f = await fixture(t);
   await f.install();
+  const installedFacts = path.join(f.home, '.local/share/gateway/provider-facts.ts');
+  await access(installedFacts);
   const once = await readFile(f.shell, 'utf8');
   await f.install();
   assert.equal(await readFile(f.shell, 'utf8'), once);
@@ -161,6 +220,7 @@ test('setup preserves shell content, is repeatable, and uninstall survives plugi
   const reply = JSON.parse((await f.invoke('claude-multi', ['hello world'])).stdout);
   assert.deepEqual(reply, { native: true, args: ['hello world'] });
   await f.invoke('multi', ['uninstall']);
+  await assert.rejects(access(installedFacts), /ENOENT/);
   const original = f.windows
     ? '# user settings\r\n'
     : '# user settings\nexport EXISTING=retained\n';
@@ -351,6 +411,14 @@ test('provider selection and native settings arguments preserve explicit disable
   assert.equal(providerSelection(undefined), undefined);
   assert.deepEqual(providerSelection(''), []);
   assert.deepEqual(providerSelection('zen,zen,openai'), ['zen', 'openai']);
+  assert.deepEqual(providerSelection('openai,zen,cursor,antigravity,grok'), [
+    'openai',
+    'zen',
+    'cursor',
+    'antigravity',
+    'grok',
+  ]);
+  assert.deepEqual(providerSelection('pi'), ['deepseek', 'zai', 'zai-coding-cn', 'strata']);
   assert.throws(() => providerSelection('typo'), /Unknown Multi provider/);
   assert.deepEqual(
     settingsArguments([

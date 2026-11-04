@@ -3,10 +3,15 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 import { executableInvocation } from '../gateway/executable.ts';
+import {
+  type ProviderId,
+  providerPluginIds,
+  providersForPlugin,
+} from '../gateway/provider-facts.ts';
 
 const MARKETPLACE = 'cc-multi-cli-plugin';
-const PROVIDERS = ['openai', 'cursor', 'zen', 'antigravity', 'grok'] as const;
-export type Provider = (typeof PROVIDERS)[number];
+const PLUGINS = providerPluginIds();
+export type Provider = ProviderId;
 
 interface Plugin {
   id: string;
@@ -20,12 +25,12 @@ export function providerSelection(value: string | undefined): Provider[] | undef
   if (value === undefined) {
     return undefined;
   }
-  return [...new Set(value.split(',').filter(Boolean))].map((id) => {
-    const provider = PROVIDERS.find((name) => name === id);
-    if (!provider) {
+  const selectedPlugins = [...new Set(value.split(',').filter(Boolean))];
+  return selectedPlugins.flatMap((id) => {
+    if (!PLUGINS.includes(id)) {
       throw new Error(`Unknown Multi provider: ${id}`);
     }
-    return provider;
+    return providersForPlugin(id);
   });
 }
 
@@ -83,7 +88,7 @@ export async function installedPlugins(
   if (core.length && personalCore.length !== 1) {
     throw new Error('Install multi-core at user scope before running Multi setup.');
   }
-  const providers = PROVIDERS.filter((name) =>
+  const providers = PLUGINS.filter((name) =>
     plugins.some((plugin) => plugin.id === `multi-${name}@${MARKETPLACE}` && plugin.enabled),
   );
   return { root: personalCore[0]?.installPath, providers };
