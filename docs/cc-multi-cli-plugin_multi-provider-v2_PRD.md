@@ -2723,6 +2723,8 @@ Pi AI provider discovery
 
 实现 Pi model → `ModelDescriptor`，只暴露 curated 白名单中的聊天模型，且仅接受 `api === 'openai-completions'`。工具能力由 Multi 的 curated catalog 明确声明，不从 Pi 元数据推测；白名单外模型不因 `MULTI_MODELS` 或 `MULTI_PI_MODELS` 而加入。
 
+Pi 模型不支持请求中的 effort 时不报错，按 `low < medium < high < xhigh < max` 的序号距离就近映射到已支持档位（thinking 级别表中值为字符串；null/缺失键不算支持），等距取较高档，并在该请求的响应中提示一次实际使用档位（流式与非流式一致，不按块重复）。未声明 effort 的模型（如 Strata）直接丢弃 effort，不向上游发送 reasoning effort，并在响应中提示一次已忽略 effort。已支持的档位原样采用、不产生映射提示；真正缺省 effort 时，reasoning 模型按 curated 默认 `high`（显式 `thinking: disabled` 则不传），未声明 effort 的模型不传且不提示；CLI 发来的默认 `medium` 不属于字段缺省。
+
 ---
 
 ### MP-0604

@@ -26,23 +26,31 @@
 - **WHEN** `MULTI_PI_MODELS` 包含不在白名单中的模型 ID
 - **THEN** 启动 SHALL 报错并指出该 ID
 
-### Requirement: 只接受模型支持的 effort
-请求带 `output_config.effort` 时，只有该模型的 thinking 级别表中该级别的值是字符串，才 SHALL 接受。值为 null 或级别表中没有该键都 SHALL 返回 BadRequest，提示把 `/effort` 改回 auto。不支持 reasoning 的模型 SHALL 拒绝任何 effort。
+### Requirement: effort 就近映射与无 effort 模型的处理
+请求带 `output_config.effort` 时，系统 SHALL 仅将模型 thinking 级别表中值为字符串的档位视为支持档位；null 和缺失键 SHALL 视为不支持。已支持的档位 SHALL 原样采用；不支持的档位 SHALL 按 `low < medium < high < xhigh < max` 的序号距离就近映射到支持档位，距离相等 SHALL 取较高的一档，MUST NOT 因该档位不支持而拒绝请求或将其原样透传。映射后 SHALL 在该请求的响应中提示一次实际使用的档位，流式与非流式 SHALL 一致且不得按块重复。未声明 effort 的模型（如 Strata）SHALL 直接丢弃请求中的 effort，不向上游发送 reasoning effort，并在响应中提示一次已忽略 effort。curated reasoning 模型 SHALL 声明非空支持集合及受支持的默认 effort。
 
 #### Scenario: 缺失的级别
-- **WHEN** 对 `deepseek-v4-pro` 请求 effort `xhigh`
-- **THEN** 系统 SHALL 返回 BadRequest，且没有上游请求
+- **WHEN** 对 `deepseek-v4-pro` 请求 effort `xhigh`，该模型支持 `high`、`max`
+- **THEN** 系统 SHALL 映射为 `max`（等距取高），上游使用对应 reasoning 设置，响应提示一次实际档位 `max`
 
 #### Scenario: medium 不被支持
-- **WHEN** 对任一首批模型请求 effort `medium`
-- **THEN** 系统 SHALL 返回 BadRequest
+- **WHEN** 对任一首批 reasoning 模型请求 effort `medium`
+- **THEN** 系统 SHALL 映射为 `high`，并在响应中提示一次实际档位 `high`
+
+#### Scenario: CLI 默认 medium 被映射
+- **WHEN** Claude Code 的请求携带默认 `output_config.effort: "medium"`，目标为 `deepseek-v4-pro`
+- **THEN** 系统 SHALL 将该字段视为存在，映射为 `high` 并在响应中提示一次实际档位 `high`，不得将其视为缺省字段
+
+#### Scenario: Strata 丢弃 effort
+- **WHEN** 对未声明 effort 的 `qwen3.8-flash-next` 请求携带 effort `high`（无论由 CLI 默认还是显式选择产生）
+- **THEN** 系统 SHALL 丢弃 effort，上游请求不含 reasoning effort，响应提示一次已忽略 effort
 
 #### Scenario: 支持的级别
 - **WHEN** 对 `glm-5.3` 请求 effort `low`
-- **THEN** 上游请求 SHALL 带上对应的 reasoning 设置
+- **THEN** 上游请求 SHALL 带上对应的 reasoning 设置，不产生映射提示
 
 ### Requirement: 未指定 effort 时的默认值
-请求没有 `output_config.effort` 时：若 `thinking.type` 为 `disabled`，SHALL 不发送 reasoning 设置；否则 SHALL 使用该模型在白名单中声明的默认 effort（首批 reasoning 模型为 `high`），不让 Pi 默认关闭 thinking。
+对声明了 effort 的模型，请求没有 `output_config.effort` 时：若 `thinking.type` 为 `disabled`，SHALL 不发送 reasoning 设置；否则 SHALL 使用该模型在白名单中声明的默认 effort（首批 reasoning 模型为 `high`），不让 Pi 默认关闭 thinking。未声明 effort 的模型 SHALL 始终不发送 reasoning effort；字段缺省时不产生忽略提示。
 
 #### Scenario: 默认开启 thinking
 - **WHEN** 对 `deepseek-v4-pro` 的请求没有 effort，也没有关闭 thinking

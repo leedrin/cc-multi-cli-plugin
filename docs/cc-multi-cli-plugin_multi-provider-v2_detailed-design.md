@@ -436,7 +436,7 @@ plugins/multi-pi/
 | `tool_choice: tool` | `{type:'function', function:{name: toolName(name)}}` | 同上；名字不在已声明工具中时 BadRequest（同 `multi-zen/src/chat.ts:331`） |
 | `max_tokens` | `maxTokens` | 必须在 `1..model.maxTokens`，否则报错；缺省 `min(32000, maxTokens)` |
 | `stop_sequences` | — | 非空时 `BadRequest`。如果 S4 发现 Claude Code 真的发送，改用 Zen 的本地检测方式 |
-| `cache_control` | — | 丢弃。首批 provider 按前缀自动缓存 |
+| `cache_control` | — | 不进入 Pi Context；S4 实测 Claude Code 会在 system 与 message content 中发送 `{type: 'ephemeral'}`。首批 provider 仍按前缀自动缓存；两者是否具有完全相同的缓存语义未由本地假上游实验验证 |
 | `temperature` 等采样参数 | | 与 `toChat` 相同的取舍 |
 
 Pi 的 assistant 消息还要求 `api`、`provider`、`model`、`usage`、`stopReason`、`timestamp`。回放时从描述符填入，`usage` 用零值占位（只给 Pi 的类型，不进入计费），`timestamp` 用固定值，保证纯函数输出字节稳定。**同 provider+api+model 才保留 thinking**（Pi README:1581-1582），这三个字段必须与原响应一致。
@@ -459,16 +459,17 @@ Pi 的 `convertTools`（`openai-completions.js:1139-1166`）原样发送 `tool.n
 ## 12.4 Effort
 
 ```text
-output_config.effort 存在
-  thinkingLevelMap[effort] 不是字符串 → BadRequest：
-     "<model> does not support effort <x>. Reset /effort to auto to use its native default."
-  否则 → reasoningEffort: effort
-effort 缺失
+模型未声明 effort（如 Strata）
+  不传 reasoningEffort；请求带 output_config.effort 时丢弃，并在响应中提示一次已忽略 effort
+模型声明了 effort 且 output_config.effort 存在
+  thinkingLevelMap[effort] 是字符串 → reasoningEffort: effort
+  否则 → 就近映射到 map 值为字符串的支持档位，并在响应中提示一次实际使用的档位
+模型声明了 effort 且 effort 缺失
   body.thinking.type === 'disabled' → 不传 reasoningEffort
   否则 → curated defaultEffort（首批都是 'high'）
 ```
 
-只接受 map 值为字符串的级别，`null` 和缺失的键都算不支持。缺失的键不能放行：Pi 会把它原样发给上游，比如 `deepseek-v4-pro` 的 map 没有 `xhigh`，Pi 会发送 `reasoning_effort: "xhigh"`（`openai-completions.js:680-681`）。`ModelDescriptor.reasoning.efforts` 用同一规则派生，curated 模型必须有 map，由单测保证。
+支持集合只包含 map 值为字符串的级别，`null` 和缺失的键都算不支持，但不因此拒绝请求。按 `low < medium < high < xhigh < max` 的序号距离选最近的支持档位，等距取较高档；仅发生映射时在该请求的响应中提示一次实际使用档位（流式与非流式一致，不按块重复）。未声明 effort 的模型收到 effort 时直接丢弃，同样提示一次。不得把不支持的级别原样透传：Pi 会把它原样发给上游，比如 `deepseek-v4-pro` 的 map 没有 `xhigh`（`openai-completions.js:680-681`），应映射为 `max`。`ModelDescriptor.reasoning.efforts` 仍只由字符串值派生，curated reasoning 模型必须有非空支持集合及受支持的 defaultEffort，由单测保证。
 
 `pi-ai@1.4.0` 目录中的实际级别（已从 `dist/providers/data/*.json` 核对）：
 
@@ -479,7 +480,9 @@ effort 缺失
 | `glm-5.3`、`glm-5.3-flash` | low、high、max |
 | `glm-5.2` | high、max |
 
-没有模型支持 `medium`。如果 Claude Code 默认发送 `medium`，每个请求都会失败，所以 S4 必须确认实际发送的 effort。
+上述目录模型均不支持 `medium`。若请求携带 `medium`，全部映射到 `high`（`low`/`high` 等距时取高），并在响应中提示一次实际档位。S4 的 Sonnet 默认场景发送 `medium`，但不能外推为所有 Pi 路由的默认值；2.1.318 的干净配置补验中，`multi/deepseek/deepseek-v4-pro` 和 `multi/strata/qwen3.8-flash-next` 实际发送 `high`。这仅限 §18.1 所列模型、参数和配置，不代表所有路由或 launcher/picker 元数据下的默认行为。
+
+S4 还确认 `--effort low|medium|high|xhigh|max` 分别原样出现在请求中；对应模型目录不支持的级别由上述就近映射规则处理，未声明 effort 的模型则丢弃并提示一次。`thinking.type` 实测为 `adaptive`。`claude --help` 未提供关闭 thinking 的 CLI 开关；隔离 settings 中的 `alwaysThinkingEnabled: false` 和 `MAX_THINKING_TOKENS=0` 实测均未改变该字段，本轮没有确认可关闭 thinking 的设置方式。
 
 **为什么要默认 effort：** Pi 在没有 `reasoningEffort` 时会主动关闭 thinking（`openai-completions.js:625-627,672-678`），不是“用 provider 默认值”。
 
@@ -678,7 +681,7 @@ Strata 是维护者写在本地 Pi 配置里的自定义 provider，不在 `pi-a
 | 模型事实 | `catalog.ts` 手写一行，取值见上表。Multi 运行时不从 Pi 配置同步，配置改了要手动改这一行 |
 | API 限制 | 是 `openai-completions`，符合决定 D-K，不增加额外的适配器核对 |
 
-**effort：** 配置没有声明 `reasoning`，所以 Strata 模型不声明 effort，也没有 `defaultEffort`。请求带 `output_config.effort` 时按 §12.4 报错，让用户把 `/effort` 改回 auto。S4 确认 Claude Code 选中这类模型时实际发送的值。
+**effort：** 配置没有声明 `reasoning`，所以 Strata 模型不声明 effort，也没有 `defaultEffort`。请求带 `output_config.effort` 时直接丢弃，不向上游发送 reasoning effort，并在响应中提示一次已忽略 effort（§12.4）。S4 的 2.1.318 干净配置补验对 `multi/strata/qwen3.8-flash-next` 观察到 `high`，仅限 §18.1 所列启动条件，不外推所有非 reasoning 模型。
 
 **未验证：** 这个本地服务是否真的不返回 reasoning 字段，只有 live 能确认。如果返回了，流映射按普通 thinking 块处理并用 §12.5 的签名往返。
 
@@ -697,7 +700,7 @@ Strata 是维护者写在本地 Pi 配置里的自定义 provider，不在 `pi-a
 | **P4 Launcher** | MP-0401–0405 | §7.4、§11；`gw/provider-usage.ts` 表驱动 | `npm run test:mod` 通过；P0 快照除明确允许的差异外不变 |
 | **P5a Pi + DeepSeek** | MP-0601–0604、0606 | §9、§10、§12、§13 | §19 全部离线测试通过；启动耗时达到 §19 目标 |
 | **P5b GLM** | MP-0605 | `zai`、`zai-coding-cn` | `zaiToolStream` 和 thinking 字段 fixture 通过 |
-| **P5c Strata** | 新增 | §16.1 | 地址校验、未配置时不可用、非 reasoning 模型的 effort 报错 fixture 通过 |
+| **P5c Strata** | 新增 | §16.1 | 地址校验、未配置时不可用、非 reasoning 模型丢弃 effort 并在响应中提示一次的 fixture 通过 |
 | **P6 Live** | — | `npm run test:live:pi`（**需用户批准并提供 key**） | 见下 |
 
 **Milestone D（改写）：** DeepSeek 和 GLM 至少各有一个模型能经 Pi AI 在 Claude Code 中跑完 Claude tool loop，包括多轮工具调用、thinking 往返和用量显示。维护者持有 DeepSeek 和 GLM coding plan 两家的 key，所以两家都要通过 live 验收，不能只凭离线测试算完成。GLM 只要求 key 所属的那个端点通过 live，另一个端点仅通过离线测试，并在 CHANGELOG 中写明。Strata 单独验收，不阻塞 Milestone D，通过标准相同。
@@ -738,6 +741,36 @@ S1 和 S3 需要实际运行下载的 Pi 代码。它们是 P0 的一部分，�
 
 **S3 — 通过（记录测量值）。** 在独立忽略目录安装该精确版本；测量整个 `node_modules` 普通文件为 69,622,276 字节，包含 98 个 `package.json`（依赖包数），安装报告新增 87 个包。Node `v24.22.1`。原先 5 个独立 Node 进程只导入 `@earendil-works/pi-ai/providers/deepseek` 的结果为 31.152 ms 中位数（单次：45.402、25.496、31.152、68.037、22.550 ms），仅代表 provider 入口导入，不含懒加载的 stream 实现。补测中 5 个独立冷启动进程均导入该 provider 并调用 `stream`，计时从 import 前至收到真实 `openai-completions` 实现处理录制 SSE 后的首个 `start` 事件；含 provider 与懒加载 stream 实现及其依赖的导入、请求设置和首事件解析，但不含 Node 进程启动和首事件之后的流处理。每次均使用注入的离线 fetch、假 key，并将 `globalThis.fetch` 设为抛错桩。加载至首事件耗时中位数为 944.815 ms（单次：1006.011、3230.313、742.725、944.815、454.730 ms）。
 
+**S2 — 通过（CLI 2.1.318，Windows；仅下述保存选择与请求标签场景，未验证其他版本、真正交互 picker 或 `%2F`）。** 隔离 user `settings.json` 保存 `multi/deepseek/deepseek-v4-pro[1m]`。在 Node 中从 `plugins/multi-core/src/launcher.ts` 提取并执行原始 `savedSelection()` 函数（设置隔离 `CLAUDE_CONFIG_DIR`），返回值精确保留 `[1m]`。真实 CLI 请求通过 loopback 假上游观察到 `/v1/messages?beta=true` 的 `model` 为 `multi/deepseek/deepseek-v4-pro`（`[1m]` 不在 model 字符串中）；仅记录 header 名称 `anthropic-beta` 中 context-1m 标识是否出现，结果为是。显式使用普通 `sonnet` 模型的对照请求中该标识为否。与假设的差异是 CLI 将上下文标签编码为 beta 标识，而不是保留在请求 model 字符串；该差异与 `savedSelection()` 保留完整选择、Claude 请求剥离标签并采用 context-1m beta 的行为一致。未推断 `%2F` 行为。
+
+**S4 — 通过（字段观察与 effort 契约已同步；不代表 Pi 上游映射实现已验收）。** CLI 版本以 `claude --version` 和本轮实际使用的原生 exe `--version` 核实，均为 `2.1.318 (Claude Code)`，环境为 Windows。前轮 Sonnet 默认/effort/工具往返的请求模型为 `claude-sonnet-5-5`；不能由此推出 Pi 路由的默认值。在 `.agent/spikes/s2s4/` 使用 loopback 假上游、隔离 `CLAUDE_CONFIG_DIR`、假认证、清除 `MULTI_*` 环境变量并直接调用真实 CLI 路径；假上游记录器仅投影字段名、类型、枚举和路径，不保存请求内容或 header 值。审查确认前轮 CLI 自身另有正文落盘，本轮已清理 30 个会话及备份、缓存等全部非投影文件；不能把假上游无正文误称为前轮全目录无正文。本轮每次均加 `--no-session-persistence` 和 `--system-prompt-snapshot off`，结束后立即清理 CLI 仍生成的配置/备份/插件缓存，仅保留去内容化的 `observations.jsonl`，全目录正文键扫描无命中。假上游返回合法 `message_start → content_block_start/delta/stop → message_delta → message_stop` SSE，真实 CLI 每次正常结束并输出 `ok`。前轮复现的 `parse: failed` 定位到无 body 的 `/api/hello`：记录器对所有路径尝试 JSON.parse；这不是 JSON Messages 请求，也不是 `count_tokens`，不据此追溯断言所有旧 parse 失败的唯一来源。CLI 消息请求路径为 `/v1/messages?beta=true`。
+
+| 场景 / 字段 | 是否出现 / 类型 / 枚举 |
+| --- | --- |
+| 默认 `stop_sequences` | 未出现 |
+| 默认 `tool_choice`（是否为 `any`） | 未出现 |
+| 工具往返 `tool_choice` | 未出现 |
+| 默认 / 工具往返 `tool_reference` | 未出现 |
+| 默认 `cache_control` | object；system 和 message content 的 `type` 为 `ephemeral` |
+| 工具往返 `cache_control` | object；system、user、assistant message content 的 `type` 为 `ephemeral` |
+| 默认 `temperature` | 未出现 |
+| `--effort low` | `output_config.effort`: string `low` |
+| `--effort medium` | `output_config.effort`: string `medium` |
+| `--effort high` | `output_config.effort`: string `high` |
+| `--effort xhigh` | `output_config.effort`: string `xhigh` |
+| `--effort max` | `output_config.effort`: string `max` |
+| 前轮无 `--effort`（Sonnet 默认） | model: string `claude-sonnet-5-5`；`output_config.effort`: string `medium`；前轮记录不足以证明其他路由的默认配置 |
+| 本轮无 `--effort`、无保存 effort（Sonnet） | model: string `claude-sonnet-5-5`；`output_config.effort`: string `medium`；`thinking.type`: string `adaptive` |
+| 本轮无 `--effort`、无保存 effort（DeepSeek Multi 路由） | model: string `multi/deepseek/deepseek-v4-pro`；`output_config.effort`: string `high`；`thinking.type`: string `adaptive` |
+| 本轮无 `--effort`、无保存 effort（Strata Multi 路由） | model: string `multi/strata/qwen3.8-flash-next`；`output_config.effort`: string `high`；`thinking.type`: string `adaptive` |
+| thinking（默认、`alwaysThinkingEnabled: false`、`MAX_THINKING_TOKENS=0`） | object；`thinking.type`: string `adaptive`，尝试的关闭方式均未改变它；本轮没有找到可用关闭开关 |
+| 工具往返第一请求 | `tools`: array，length 2；各项 keys 为 `name`、`description`、`input_schema`、`defer_loading`；name 为 string |
+| 工具往返第二请求 | `messages[].content[].type`: string 枚举 `text`、`tool_use`、`tool_result`；观察到实际 tool_result 往返 |
+
+本轮对照条件：每个模型单独启动原生 `claude.exe`，参数为 `--bare --print --no-session-persistence --system-prompt-snapshot off --setting-sources "" --settings '{}' --strict-mcp-config --mcp-config '{"mcpServers":{}}' --tools "" --model <上表对应模型>`，不带 `--effort`；每次使用全新隔离 config 和专用 project，无保存 effort，环境不继承任何 `MULTI_*`、effort、认证或代理配置，仅加入假认证、loopback 地址及禁用非必要流量设置。三次均正常退出，假 SSE 响应为 `ok`，没有生成会话 JSONL。这是直接 CLI 的请求侧观察，没有经过 Multi launcher、picker 或模型元数据注入，也未访问真实 Pi/Strata 服务；未验证非 bare 模式、其他模型、用户已保存设置或其他 CLI 版本，不能推断 `/effort auto` 的行为。
+
+与 §12.3 假设的差异：Claude Code 确实发送嵌套 `cache_control: {type: "ephemeral"}`，但未在本地实验确认它与 Pi provider 前缀自动缓存语义完全等价；§12.3 已记录该观察与未验证边界。`stop_sequences`、`tool_choice: any`、`tool_reference`、`temperature` 在覆盖场景均未出现。与 §12.4 假设的差异：默认 effort 随实测模型而异（Sonnet 为 `medium`，本轮两个 Multi 路由为 `high`），显式 effort 各档原样发送。按用户 2026-11-05 决定统一契约：不支持的档位就近映射（等距取高）并在响应中提示一次实际档位；未声明 effort 的模型丢弃 effort 并提示一次。CLI 发来的 `medium` 与请求真正缺省 effort 是两种情况，后者仍按 §12.4 的 curated 默认规则；未将本地假上游观察当作映射/提示实现通过的证据。thinking 关闭方式未能确认，§12.4 已记录。判定：通过（本轮补齐指定 Multi 路由的干净配置对照、版本和适用边界，effort 设计及规范已同步；其他边界未验证）。
+
 ---
 
 # 19. 测试矩阵
@@ -764,7 +797,7 @@ S1 和 S3 需要实际运行下载的 Pi 代码。它们是 P0 的一部分，�
 | 中止 | 客户端断开 → signal 传到 Pi；只发一次上游请求 |
 | 权限 | plan 拒绝；auto 带 statement；reviewer 查找不再按名 |
 | 安全 | 金丝雀 key：跑完整流程后断言不出现在事件、receipt、trace、错误、`gatewayEnvironment`、harness env；单一主机；不访问 `~/.pi`；未启用时变量不被删除 |
-| Strata | 非回环 `http://`、非法 URL 报错；缺地址时不出现在 picker 和 worker；回环地址无 key 时发送占位值，非回环地址无 key 时报错；启用后不读 `~/.pi/agent/models.json`；带 effort 的请求报错；usage 走 §13 |
+| Strata | 非回环 `http://`、非法 URL 报错；缺地址时不出现在 picker 和 worker；回环地址无 key 时发送占位值，非回环地址无 key 时报错；启用后不读 `~/.pi/agent/models.json`；带 effort 的请求丢弃 effort 并在响应中提示一次；usage 走 §13 |
 | 平台 | `takeProviderCredentials` 和 launcher 分支接受显式 `platform`，在 Linux 上覆盖 Windows 分支 |
 | 性能 | 无 key 启动不加载 `pi-ai`（断言模块未被 import）；Registry 构建 < 100 ms（PRD §59） |
 | 回归 | 现有全部单测；P0 快照；`npm run test:mod` |
