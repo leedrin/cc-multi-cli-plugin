@@ -52,7 +52,7 @@
 - [x] 6.3 `src/catalog.ts`：首批 DeepSeek 模型的严格白名单，只放行 `openai-completions`；`MULTI_PI_MODELS` 含白名单外 ID 时报错；支持的 effort 与默认 effort（null 级别、缺失键就近映射到支持档位，按 low < medium < high < xhigh < max、等距取高，响应提示一次实际档位；缺省 `high`，`thinking: disabled`）；单测通过
 - [x] 6.4 `src/backend.ts`：懒加载（代码旁注明 AGENTS.md 直接 import 规则的例外理由），只 import `providers/deepseek`；显式 `cacheRetention: 'short'`、`maxRetries: 0`、`redirect: 'error'`、单一上游主机；`open` 等待首个事件。单测：无 key 启动未 import `pi-ai`，`PI_CACHE_RETENTION=long` 时请求字节不变
 - [x] 6.5 MP-0602：`src/messages.ts` 与 `src/signature.ts`：请求转换（DD §12.3 每行）、`max_tokens` 范围、`tool_choice`、工具名别名复用 `gw/tools.ts`、`multipi:v1:` 签名往返与相邻 thinking 合并、BadRequest 路径、字节稳定；单测覆盖 spec `pi-message-translation` 的请求侧场景
-- [ ] 6.6 MP-0603：`src/stream.ts`：按 delta 生成块、签名在关闭时发出、`thinking_end` 改写签名时失败、工具调用完整后才发出并 `stripWorkerModel`、`argumentsError` 显式失败（金丝雀断言）、停止原因映射、未支持签名字段失败、错误不含响应体；用真实事件顺序 fixture 离线通过
+- [x] 6.6 MP-0603：`src/stream.ts`：按 delta 生成块、签名在关闭时发出、`thinking_end` 改写签名时失败、工具调用完整后才发出并 `stripWorkerModel`、`argumentsError` 显式失败（金丝雀断言）、停止原因映射、未支持签名字段失败、错误不含响应体；用真实事件顺序 fixture 离线通过
 - [x] 6.7 MP-0604：`src/usage.ts` 从原始 chunk 构建 canonical usage（`prompt_cache_hit_tokens`、`choices[0].usage`、无 usage → `unavailable`、显式 0 → 0），不使用 Pi 的 usage 和 cost；receipt 与 `/multi-usage` 一致，配额行显示 unavailable 和原因
 - [ ] 6.8 `src/gateway-request.ts` 接入 Direct 契约；count_tokens 返回带估算标记的本地值且不加载 Pi；权限测试：plan 拒绝、auto 带 statement `no auto mode: actions run unreviewed`
 - [ ] 6.9 安全测试：金丝雀 key 跑完整流程后不出现在事件、receipt、trace、错误、`gatewayEnvironment`、harness env；新增 `test:live:pi` 脚本（默认不运行）
