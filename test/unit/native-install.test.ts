@@ -12,6 +12,7 @@ import {
   readInstallation,
 } from '../../plugins/multi-core/src/install/installation.ts';
 import {
+  installedPlugins,
   providerSelection,
   settingsArguments,
 } from '../../plugins/multi-core/src/install/plugins.ts';
@@ -51,6 +52,15 @@ async function fixture(t: test.TestContext) {
   const script = `const fs = require('node:fs');
 const args = process.argv.slice(2);
 if (args.includes('plugin') && args.includes('list')) {
+  if (process.env.TEST_CAPTURE) {
+    fs.writeFileSync(process.env.TEST_CAPTURE, JSON.stringify({
+      deepseek: process.env.DEEPSEEK_API_KEY !== undefined,
+      zen: process.env.OPENCODE_API_KEY !== undefined,
+      deepseekLower: process.env.deepseek_api_key !== undefined,
+      zenMixed: process.env.OpEnCoDe_ApI_KeY !== undefined,
+      retained: process.env.RETAINED,
+    }));
+  }
   console.log(fs.readFileSync(process.env.TEST_PLUGIN_LIST, 'utf8'));
 } else {
   console.log(JSON.stringify({native:true,args}));
@@ -127,7 +137,7 @@ async function core(directory: string, name: string) {
   await mkdir(src, { recursive: true });
   await writeFile(
     path.join(src, 'launcher.ts'),
-    `console.log(JSON.stringify({root:import.meta.url,args:process.argv.slice(2),providers:process.env.MULTI_ENABLED_PROVIDERS,claude:process.env.MULTI_REAL_CLAUDE,models:process.env.MULTI_MODELS ?? null}));`,
+    `console.log(JSON.stringify({root:import.meta.url,args:process.argv.slice(2),providers:process.env.MULTI_ENABLED_PROVIDERS,claude:process.env.MULTI_REAL_CLAUDE,models:process.env.MULTI_MODELS ?? null,deepseekPresent:process.env.DEEPSEEK_API_KEY !== undefined,zenPresent:process.env.OPENCODE_API_KEY !== undefined}));`,
   );
   return root;
 }
@@ -184,6 +194,64 @@ for (const plugin of existingPluginIds) {
   });
 }
 
+test('plugin-list probe strips all provider credentials and preserves the supplied environment', async (t) => {
+  const f = await fixture(t);
+  const capture = path.join(f.directory, 'plugin-list-env.json');
+  const env = {
+    ...f.env,
+    TEST_CAPTURE: capture,
+    DEEPSEEK_API_KEY: 'fake-deepseek',
+    OPENCODE_API_KEY: 'fake-zen',
+    deepseek_api_key: 'fake-lowercase',
+    OpEnCoDe_ApI_KeY: 'fake-mixedcase',
+    RETAINED: 'keep',
+  };
+  const snapshot = { ...env };
+  const hostKeys = ['TEST_PLUGIN_LIST', 'TEST_CAPTURE', 'DEEPSEEK_API_KEY', 'OPENCODE_API_KEY'];
+  const originalHost = new Map(hostKeys.map((key) => [key, process.env[key]]));
+  process.env.TEST_PLUGIN_LIST = f.listing;
+  process.env.TEST_CAPTURE = capture;
+  process.env.DEEPSEEK_API_KEY = 'fake-host-deepseek';
+  process.env.OPENCODE_API_KEY = 'fake-host-zen';
+  try {
+    await installedPlugins(f.real, [], { env, platform: 'win32' });
+    const childEnv = JSON.parse(await readFile(capture, 'utf8'));
+    assert.deepEqual(childEnv, {
+      deepseek: false,
+      zen: false,
+      deepseekLower: false,
+      zenMixed: false,
+      retained: 'keep',
+    });
+    assert.deepEqual(env, snapshot);
+  } finally {
+    for (const [key, value] of originalHost) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+});
+
+test('bootstrap preserves provider credentials for the launcher child', async (t) => {
+  const f = await fixture(t);
+  await f.install();
+  const root = await core(f.directory, 'core');
+  await writeFile(f.listing, JSON.stringify(plugins(root)));
+  const result = JSON.parse(
+    (
+      await f.invoke('claude-multi', [], {
+        DEEPSEEK_API_KEY: 'fake-deepseek-launcher',
+        OPENCODE_API_KEY: 'fake-zen-launcher',
+      })
+    ).stdout,
+  );
+  assert.equal(result.deepseekPresent, true);
+  assert.equal(result.zenPresent, true);
+});
+
 test('installed plugin IDs pass through bootstrap and include multi-pi', async (t) => {
   const f = await fixture(t);
   await f.install();
@@ -211,7 +279,9 @@ test('setup preserves shell content, is repeatable, and uninstall survives plugi
   const f = await fixture(t);
   await f.install();
   const installedFacts = path.join(f.home, '.local/share/gateway/provider-facts.ts');
+  const installedCredentials = path.join(f.home, '.local/share/gateway/provider-credentials.ts');
   await access(installedFacts);
+  await access(installedCredentials);
   const once = await readFile(f.shell, 'utf8');
   await f.install();
   assert.equal(await readFile(f.shell, 'utf8'), once);
@@ -221,6 +291,7 @@ test('setup preserves shell content, is repeatable, and uninstall survives plugi
   assert.deepEqual(reply, { native: true, args: ['hello world'] });
   await f.invoke('multi', ['uninstall']);
   await assert.rejects(access(installedFacts), /ENOENT/);
+  await assert.rejects(access(installedCredentials), /ENOENT/);
   const original = f.windows
     ? '# user settings\r\n'
     : '# user settings\nexport EXISTING=retained\n';

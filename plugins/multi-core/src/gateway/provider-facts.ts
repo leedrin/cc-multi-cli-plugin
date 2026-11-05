@@ -1,8 +1,33 @@
 /** Static provider facts shared with Claude Mods hooks; keep this module host-free. */
 // Listed worker names are reserved and recognized by Multi whether or not their plugin is installed.
-export const PROVIDER_FACTS = [
+interface ProviderFact {
+  id:
+    | 'openai'
+    | 'zen'
+    | 'cursor'
+    | 'antigravity'
+    | 'grok'
+    | 'deepseek'
+    | 'zai'
+    | 'zai-coding-cn'
+    | 'strata';
+  plugin: 'openai' | 'zen' | 'cursor' | 'antigravity' | 'grok' | 'pi';
+  kind: 'direct' | 'harness';
+  worker: string;
+  label: string;
+  credentialEnv?: readonly string[];
+}
+
+export const PROVIDER_FACTS: readonly ProviderFact[] = [
   { id: 'openai', plugin: 'openai', kind: 'direct', worker: 'multi-openai', label: 'OpenAI' },
-  { id: 'zen', plugin: 'zen', kind: 'direct', worker: 'multi-zen', label: 'Zen' },
+  {
+    id: 'zen',
+    plugin: 'zen',
+    kind: 'direct',
+    worker: 'multi-zen',
+    label: 'Zen',
+    credentialEnv: ['OPENCODE_API_KEY'],
+  },
   { id: 'cursor', plugin: 'cursor', kind: 'harness', worker: 'multi-cursor', label: 'Cursor' },
   {
     id: 'antigravity',
@@ -12,7 +37,14 @@ export const PROVIDER_FACTS = [
     label: 'Antigravity',
   },
   { id: 'grok', plugin: 'grok', kind: 'harness', worker: 'multi-grok', label: 'Grok' },
-  { id: 'deepseek', plugin: 'pi', kind: 'direct', worker: 'multi-deepseek', label: 'DeepSeek' },
+  {
+    id: 'deepseek',
+    plugin: 'pi',
+    kind: 'direct',
+    worker: 'multi-deepseek',
+    label: 'DeepSeek',
+    credentialEnv: ['DEEPSEEK_API_KEY'],
+  },
   { id: 'zai', plugin: 'pi', kind: 'direct', worker: 'multi-zai', label: 'Z.AI' },
   {
     id: 'zai-coding-cn',

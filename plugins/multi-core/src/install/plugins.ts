@@ -3,7 +3,9 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 import { executableInvocation } from '../gateway/executable.ts';
+import { withoutProviderCredentials } from '../gateway/provider-credentials.ts';
 import {
+  PROVIDER_FACTS,
   type ProviderId,
   providerPluginIds,
   providersForPlugin,
@@ -38,19 +40,28 @@ export function providerSelection(value: string | undefined): Provider[] | undef
 export async function installedPlugins(
   claude: string,
   settingsArgs: string[] = [],
-  options: { platform?: NodeJS.Platform } = {},
+  options: { platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv } = {},
 ) {
   const platform = options.platform ?? process.platform;
+  const env = options.env ?? process.env;
   const invocation = executableInvocation(
     claude,
     [...settingsArgs, 'plugin', 'list', '--json'],
     platform,
+    env,
+  );
+  const invocationEnv = (invocation.options as { env?: NodeJS.ProcessEnv } | undefined)?.env;
+  const childEnv = withoutProviderCredentials(
+    { ...env, ...(invocationEnv ?? {}) },
+    PROVIDER_FACTS.flatMap(({ credentialEnv }) => credentialEnv ?? []),
+    { platform },
   );
   const { stdout } = await promisify(execFile)(invocation.command, invocation.args, {
     timeout: 15000,
     maxBuffer: 4 * 1024 * 1024,
     encoding: 'utf8',
     ...invocation.options,
+    env: childEnv,
   });
   const parsed: unknown = JSON.parse(stdout);
   if (!Array.isArray(parsed)) {

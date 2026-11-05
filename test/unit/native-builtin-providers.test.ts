@@ -55,6 +55,14 @@ test('harness descriptors expose their native display tools', () => {
   }
 });
 
+test('built-in descriptor credentials match their single-source provider facts', () => {
+  for (const descriptor of BUILTIN_PROVIDERS) {
+    const fact = PROVIDER_FACTS.find(({ id }) => id === descriptor.id);
+    assert(fact);
+    assert.deepEqual(descriptor.credentialEnv ?? [], fact.credentialEnv ?? [], descriptor.id);
+  }
+});
+
 test('built-in registry registers six provider descriptors with matching facts', () => {
   const registry = createBuiltinRegistry();
   assert.equal(registry.list().length, 6);

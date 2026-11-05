@@ -33,7 +33,7 @@ export const deepseekDescriptor: ProviderDescriptor = {
   plugin: deepseekFact.plugin,
   label: deepseekFact.label,
   kind: deepseekFact.kind,
-  credentialEnv: ['DEEPSEEK_API_KEY'],
+  credentialEnv: deepseekFact.credentialEnv,
   autoReview: { review: 'none', statement: 'no auto mode: actions run unreviewed' },
   unavailableMessage: deepseekUnavailable,
   worker: { type: deepseekFact.worker },

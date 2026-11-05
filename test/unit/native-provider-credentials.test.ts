@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { takeProviderCredentials } from '../../plugins/multi-core/src/gateway/provider-credentials.ts';
+import * as providerCredentials from '../../plugins/multi-core/src/gateway/provider-credentials.ts';
+
+const { takeProviderCredentials } = providerCredentials;
 
 const descriptor = (credentialEnv: string[]) => ({ credentialEnv });
 
@@ -48,6 +50,24 @@ test('on non-Windows platforms does not match credential names by case', () => {
     new Map(),
   );
   assert.deepEqual(env, { deepseek_api_key: 'keep' });
+});
+
+test('withoutProviderCredentials filters Windows case variants without mutating input', () => {
+  const candidate = Reflect.get(providerCredentials, 'withoutProviderCredentials');
+  assert.equal(typeof candidate, 'function');
+  if (typeof candidate !== 'function') {
+    return;
+  }
+  const env = {
+    deepseek_api_key: 'fake-lowercase',
+    DeepSeek_Api_Key: 'fake-mixedcase',
+    KEEP: 'retained',
+  };
+  const snapshot = { ...env };
+  assert.deepEqual(candidate(env, ['DEEPSEEK_API_KEY'], { platform: 'win32' }), {
+    KEEP: 'retained',
+  });
+  assert.deepEqual(env, snapshot);
 });
 
 test('credential helper source does not import fs or mention Pi state', async () => {

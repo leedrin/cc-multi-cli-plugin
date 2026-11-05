@@ -6,6 +6,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for current direction and
 
 ## Unreleased
 
+- **Isolate provider keys during startup probing.** Claude plugin-list probes no longer receive provider API keys in their child-process environment.
+
 - **Use DeepSeek through Pi.** DeepSeek is available as a direct provider through the curated Pi catalog, with local token estimates and canonical upstream usage.
 - **Explain hosted-provider 403 failures.** OpenAI, Zen, and DeepSeek authentication failures now include the provider's credential help for HTTP 403 responses.
 

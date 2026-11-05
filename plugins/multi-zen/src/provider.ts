@@ -1,4 +1,5 @@
 import { decodeModelRoute } from '../../multi-core/src/gateway/model-identity.ts';
+import { PROVIDER_FACTS } from '../../multi-core/src/gateway/provider-facts.ts';
 import type {
   ProviderDescriptor,
   ProviderDiscoveryContext,
@@ -6,6 +7,11 @@ import type {
 import { readZenKey, validateZenKey } from './auth.ts';
 import { prepareZenRequest, zenSignaturePrefixes, zenUnavailable } from './gateway-request.ts';
 import { ZEN_MODELS } from './models.ts';
+
+const zenFact = PROVIDER_FACTS.find(({ id }) => id === 'zen');
+if (!zenFact) {
+  throw new Error('Zen provider facts are missing.');
+}
 
 function modelIdentity(route: string) {
   const identity = decodeModelRoute(route);
@@ -38,7 +44,7 @@ export const zenProvider: ProviderDescriptor = {
   plugin: 'zen',
   label: 'Zen',
   kind: 'direct',
-  credentialEnv: ['OPENCODE_API_KEY'],
+  credentialEnv: zenFact.credentialEnv,
   autoReview: { review: 'none', statement: 'no auto mode: actions run unreviewed' },
   unavailableMessage: zenUnavailable,
   worker: { type: 'multi-zen' },
