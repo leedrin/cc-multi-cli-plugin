@@ -43,7 +43,7 @@
 - [x] 5.3 MP-0403：`WORKER_RUNS`、`direct`、`pickerSettings`、`gatewayEnvironment` 改为由 Registry 派生；每个 route provider 一个 worker；Agent 定义 ≤8000 的 `--agents` 预算测试通过
 - [x] 5.4 MP-0404：`gw/provider-usage.ts` 的 `UsageProvider`、`providers`、`unavailable` 改为表驱动；`native-provider-usage.test.ts` 断言不变
 - [x] 5.5 MP-0405：`.claude-plugin/marketplace.json` 与 `scripts/versioning.ts` 支持新增插件条目；`npm run check:versions` 通过
-- [ ] 5.6 第 1 组快照除明确允许的差异外不变；usage 相关既有测试断言未修改；`npm run check` 与 `npm run test:mod` 通过
+- [x] 5.6 第 1 组快照除明确允许的差异外不变；usage 相关既有测试断言未修改；`npm run check` 与 `npm run test:mod` 通过
 
 ## 6. P5a multi-pi 插件与 DeepSeek（MP-0601–0604、0606、DD §9–§13）
 
