@@ -3,6 +3,7 @@ import type {
   ProviderDescriptor,
   ProviderDiscoveryContext,
 } from '../../multi-core/src/gateway/provider-registry.ts';
+import { filterPiModels, toPiModelDescriptors } from './catalog.ts';
 
 const deepseekFact = PROVIDER_FACTS.find(({ id }) => id === 'deepseek');
 if (!deepseekFact) {
@@ -24,6 +25,7 @@ export const deepseekDescriptor: ProviderDescriptor = {
     const apiKey = context.env.DEEPSEEK_API_KEY;
     return apiKey?.trim() ? { available: true } : { available: false, reason: deepseekUnavailable };
   },
-  discoverModels: async () => [],
-  // The direct adapter is added in T032; discovery stays intentionally empty until T027.
+  discoverModels: async (context: ProviderDiscoveryContext) =>
+    toPiModelDescriptors(filterPiModels(context.env.MULTI_PI_MODELS)),
+  // The direct adapter is added in T032.
 };

@@ -6,7 +6,14 @@ import { deepseekDescriptor } from '../../plugins/multi-pi/src/provider.ts';
 
 const fact = PROVIDER_FACTS.find(({ id }) => id === 'deepseek');
 
-const context = (apiKey?: string) => ({
+const context = (
+  apiKey?: string,
+): {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  explicit: boolean;
+  log: (message: string) => void;
+} => ({
   cwd: process.cwd(),
   env: apiKey === undefined ? {} : { DEEPSEEK_API_KEY: apiKey },
   explicit: true,
@@ -32,7 +39,28 @@ test('DeepSeek availability requires a nonblank supplied API key', async () => {
   assert.deepEqual(await deepseekDescriptor.availability(context('secret')), { available: true });
   assert.equal((await deepseekDescriptor.availability(context())).available, false);
   assert.equal((await deepseekDescriptor.availability(context('  \t'))).available, false);
-  assert.deepEqual(await deepseekDescriptor.discoverModels(context('secret')), []);
+  assert.deepEqual(
+    (await deepseekDescriptor.discoverModels(context('secret'))).map(
+      ({ identity }) => identity.modelId,
+    ),
+    ['deepseek-v4-pro', 'deepseek-flash'],
+  );
+});
+
+test('DeepSeek discovery filters models from its context environment', async () => {
+  const discoveryContext = context('secret');
+  discoveryContext.env.MULTI_PI_MODELS = ' deepseek-flash,deepseek-flash ';
+  assert.deepEqual(
+    (await deepseekDescriptor.discoverModels(discoveryContext)).map(
+      ({ identity }) => identity.modelId,
+    ),
+    ['deepseek-flash'],
+  );
+  discoveryContext.env.MULTI_PI_MODELS = 'unknown';
+  await assert.rejects(
+    deepseekDescriptor.discoverModels(discoveryContext),
+    /unknown.*deepseek-v4-pro.*deepseek-flash/,
+  );
 });
 
 test('DeepSeek provider source does not import pi-ai', async () => {
