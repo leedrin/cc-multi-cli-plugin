@@ -3,7 +3,7 @@ import test from 'node:test';
 import type { AssistantMessageEvent, ToolCall } from '@earendil-works/pi-ai';
 import { toolName } from '../../plugins/multi-core/src/gateway/tools.ts';
 import { decodePiSignature, encodePiSignature } from '../../plugins/multi-pi/src/signature.ts';
-import { translatePiStream } from '../../plugins/multi-pi/src/stream.ts';
+import { type PiStreamOptions, translatePiStream } from '../../plugins/multi-pi/src/stream.ts';
 import { interleavedPiEvents, nativePiStreamEvents } from './fixtures/native-pi-stream-events.ts';
 
 const route = 'multi/deepseek/deepseek-flash';
@@ -28,7 +28,7 @@ const event = (value: Record<string, unknown>) => value as unknown as AssistantM
 const collect = async (
   events: AssistantMessageEvent[],
   toolNames: string[] = ['Agent', 'search'],
-  overrides: { rememberWorkerModel?: (id: string, type: string, model: string) => void } = {},
+  overrides: Pick<PiStreamOptions, 'rememberWorkerModel' | 'usage' | 'notice'> = {},
 ) => {
   const output: Array<{ type: string; value: unknown }> = [];
   const first = events[0];
@@ -650,6 +650,73 @@ test('Pi stream rejects tool signatures instead of dropping them', async () => {
     ]),
     (error: Error) => error.message === 'DeepSeek stream failed.',
   );
+});
+
+test('Pi effort notice is one indexed content block and canonical usage replaces Pi usage', async () => {
+  const base = message();
+  const events = [
+    event({ type: 'start', partial: base }),
+    event({ type: 'text_delta', contentIndex: 0, delta: 'answer', partial: base }),
+    event({ type: 'done', reason: 'stop', message: base }),
+  ];
+  const usage = {
+    source: 'provider' as const,
+    inputTokens: 9,
+    outputTokens: 4,
+    totalTokens: 13,
+    modelCalls: 1,
+  };
+  const streamed = await collect(events, ['Agent'], {
+    notice: 'deepseek-flash does not support effort medium; using high.',
+    usage: () => usage,
+  });
+  assert.deepEqual(
+    streamed.output.map(({ type, value }) => ({
+      type,
+      index: (value as { index?: number }).index,
+    })),
+    [
+      { type: 'message_start', index: undefined },
+      { type: 'content_block_start', index: 0 },
+      { type: 'content_block_delta', index: 0 },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'content_block_start', index: 1 },
+      { type: 'content_block_delta', index: 1 },
+      { type: 'content_block_stop', index: 1 },
+    ],
+  );
+  assert.deepEqual(streamed.result.content, [
+    { type: 'text', text: '[DeepSeek] deepseek-flash does not support effort medium; using high.' },
+    { type: 'text', text: 'answer' },
+  ]);
+  assert.deepEqual(streamed.result.usage, { input_tokens: 9, output_tokens: 4 });
+  assert.equal(streamed.result.multi_usage?.source, 'provider');
+  assert.equal(streamed.result.multi_usage?.model, route);
+  assert.equal(streamed.output.filter(({ type }) => type === 'message_stop').length, 0);
+
+  const output: string[] = [];
+  const first = events[0];
+  assert(first);
+  const nonStream = await translatePiStream(
+    {
+      first,
+      stream: {
+        async *[Symbol.asyncIterator]() {
+          yield* events.slice(1);
+        },
+      },
+    },
+    {
+      routeId: route,
+      label: 'DeepSeek',
+      model: route,
+      request: {},
+      notice: 'ignored effort.',
+      usage: () => usage,
+    },
+  );
+  output.push(...nonStream.content.filter((item) => item.type === 'text').map((item) => item.text));
+  assert.deepEqual(output, ['[DeepSeek] ignored effort.', 'answer']);
 });
 
 test('Pi stream rejects unsupported terminal reasons and changed thinking signatures', async () => {

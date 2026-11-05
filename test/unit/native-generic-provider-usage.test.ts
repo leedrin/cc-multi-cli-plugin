@@ -121,32 +121,28 @@ test('production usage menu applies generic provider activation, harness and ena
   registry.register(strata);
   const antigravity = registry.get('antigravity');
   assert(antigravity);
-  const deepseek = {
-    ...strataDescriptor(usageReader),
-    id: 'deepseek',
-    label: 'DeepSeek',
-  } satisfies ProviderDescriptor;
-  registry.register(deepseek);
+  const deepseek = registry.get('deepseek');
+  assert(deepseek);
   const runtime = new ProviderRuntime(
     [
       { descriptor: strata, models: [model], usage: usageReader },
       { descriptor: antigravity, models: [] },
-      { descriptor: deepseek, models: [], usage: usageReader },
+      { descriptor: deepseek, models: [] },
     ],
     { registry },
   );
   const view = await readUsage(runtime);
   assert.deepEqual(
     view.providers.map(({ id }) => id),
-    ['openai', 'cursor', 'zen', 'antigravity', 'grok', 'deepseek', 'strata'],
+    ['openai', 'cursor', 'zen', 'deepseek', 'antigravity', 'grok', 'strata'],
   );
-  assert(view.providers.some(({ id }) => id === 'deepseek'));
+  assert.equal(view.providers.filter(({ id }) => id === 'deepseek').length, 1);
   assert(view.providers.some(({ id }) => id === 'strata'));
   assert.equal(view.providers.find(({ id }) => id === 'antigravity')?.status, 'disabled');
 
   const noGenericActive = await readUsage(new ProviderRuntime([], { registry }));
   assert(!noGenericActive.providers.some(({ id }) => id === 'strata'));
-  assert(!noGenericActive.providers.some(({ id }) => id === 'deepseek'));
+  assert.equal(noGenericActive.providers.filter(({ id }) => id === 'deepseek').length, 1);
 
   const filtered = await readUsage(runtime, ['strata']);
   assert.equal(filtered.providers.find(({ id }) => id === 'strata')?.status, 'ready');

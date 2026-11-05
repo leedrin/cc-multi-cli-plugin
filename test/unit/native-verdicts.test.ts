@@ -15,6 +15,7 @@ import {
   type Reviewer,
   verdictsFor,
 } from '../../plugins/multi-core/src/gateway/verdicts.ts';
+import { deepseekDescriptor } from '../../plugins/multi-pi/src/provider.ts';
 
 const request = (mode: unknown = 'auto'): MessagesRequest => ({
   safeguards: [{ type: 'dangerous_tool_use', classifier_context: { permission_mode: mode } }],
@@ -67,6 +68,26 @@ test('provider table determines verdicts for every supported mode and launch dis
   }
   assert.equal(autoReviewPolicy('openai', false).review, 'none');
   assert.match(autoReviewPolicy('openai', false).statement, /unreviewed/);
+});
+
+test('Pi auto runs unreviewed with its statement while plan rejects writes and allows reads', async () => {
+  const policy = deepseekDescriptor.autoReview;
+  assert.deepEqual(policy, {
+    review: 'none',
+    statement: 'no auto mode: actions run unreviewed',
+  });
+  const auto = await verdictsFor(request('auto'), reply(['Bash']), policy, undefined, signal());
+  assert.equal(auto?.[0].status.tool_uses.call_0.outcome, 'not_flagged');
+  assert.match(policy.statement, /no auto mode: actions run unreviewed/);
+  const plan = await verdictsFor(
+    request('plan'),
+    reply(['Read', 'Bash']),
+    policy,
+    undefined,
+    signal(),
+  );
+  assert.equal(plan?.[0].status.tool_uses.call_0.outcome, 'not_flagged');
+  assert.equal(plan?.[0].status.tool_uses.call_1.outcome, 'flagged');
 });
 
 test('read-only calls skip review, plan writes block first, all harness rows and handbacks pass', async () => {

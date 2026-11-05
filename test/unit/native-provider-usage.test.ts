@@ -43,10 +43,27 @@ test('provider dashboard reads every enabled provider and preserves unavailable 
   assert.deepEqual(calls.sort(), ['cursor:owned', 'openai:owned', 'zen:owned']);
   assert.deepEqual(
     result.providers.map((row) => row.status),
-    ['ready', 'ready', 'ready', 'unavailable', 'disabled'],
+    ['ready', 'ready', 'ready', 'disabled', 'unavailable', 'disabled'],
   );
   assert.equal(result.providers[2].summary, 'zen quota');
-  assert(result.providers[3].details.includes('No native quota connection'));
+  assert(result.providers[4].details.includes('No native quota connection'));
+});
+
+test('DeepSeek has one built-in dashboard row with its specific unavailable quota explanation', async () => {
+  const dashboard = new ProviderUsageDashboard({
+    enabled: ['deepseek'],
+    extraRows: [{ id: 'deepseek', name: 'DeepSeek' }],
+  });
+  const view = await dashboard.read('session', empty());
+  const rows = view.providers.filter(({ id }) => id === 'deepseek');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.name, 'DeepSeek');
+  assert.equal(rows[0]?.url, 'https://platform.deepseek.com/usage');
+  assert.equal(rows[0]?.status, 'unavailable');
+  assert.deepEqual(rows[0]?.details.slice(0, 2), [
+    'DeepSeek exposes no account quota here; session tokens appear in receipts.',
+    'Check the DeepSeek platform console for balance and charges.',
+  ]);
 });
 
 test('provider dashboard isolates errors and explicitly reports disabled and unsupported billing', async () => {
@@ -60,7 +77,7 @@ test('provider dashboard isolates errors and explicitly reports disabled and uns
   const result = await dashboard.read('s', empty());
   assert.deepEqual(
     result.providers.map((row) => row.status),
-    ['ready', 'error', 'unavailable', 'disabled', 'disabled'],
+    ['ready', 'error', 'unavailable', 'disabled', 'disabled', 'disabled'],
   );
   assert(!JSON.stringify(result).includes('secret'));
   assert(result.providers[2].details.some((line) => line.includes('billing console')));

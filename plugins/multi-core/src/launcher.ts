@@ -214,6 +214,7 @@ export async function discoverLaunchProviders(
     antigravityModels,
     grokModels,
     genericModels,
+    deepseekKey: credentials.get('DEEPSEEK_API_KEY'),
     availableProviderIds,
   };
 }
@@ -372,6 +373,7 @@ export async function main(options: LauncherMainOptions = {}): Promise<void> {
     antigravityModels,
     grokModels,
     genericModels,
+    deepseekKey,
     availableProviderIds,
   } = discovered;
   const cursorPicker = selectedCursorOptions(cursorModels, fullCatalog);
@@ -417,7 +419,7 @@ export async function main(options: LauncherMainOptions = {}): Promise<void> {
   );
   const usageReaders = providerUsageReaders(authFile, zenKey, { cursor, antigravity, grok });
   const workers = workerCatalog(settings.modelPicker.options, grokModels);
-  const workerRegistry = createBuiltinRegistry({ authFile, zenKey });
+  const workerRegistry = createBuiltinRegistry({ authFile, zenKey, deepseekKey });
   const agents = workerDefinitions(workers, workerRegistry);
   const modBridge = new ModBridge();
   const settingsDir = await mkdtemp(path.join(os.tmpdir(), 'multi-native-settings-'));
@@ -445,6 +447,8 @@ export async function main(options: LauncherMainOptions = {}): Promise<void> {
     { cursor, antigravity, grok },
     reviewers.openai,
     genericModels,
+    createLaunchRegistry,
+    deepseekKey,
   );
   const receipts = new ReceiptLedger({
     file: process.env.MULTI_RECEIPTS_FILE
@@ -682,8 +686,9 @@ export function launcherRuntime(
   reviewer: Awaited<ReturnType<typeof createOpenAIReviewer>> | undefined,
   genericModels: Readonly<Record<string, readonly ModelDescriptor[]>> = {},
   registryFactory: LaunchRegistryFactory = createLaunchRegistry,
+  deepseekKey?: string,
 ): ProviderRuntime {
-  const registry = registryFactory({ authFile, zenKey });
+  const registry = registryFactory({ authFile, zenKey, deepseekKey });
   const active: ActiveProvider[] = [];
   const add = (id: string, provider: Omit<ActiveProvider, 'descriptor'>) => {
     const descriptor = registry.get(id);

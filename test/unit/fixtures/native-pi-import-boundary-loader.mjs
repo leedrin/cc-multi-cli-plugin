@@ -1,6 +1,8 @@
 export async function resolve(specifier, context, nextResolve) {
   const isBackendImport =
-    specifier === './backend.ts' && context.parentURL?.includes('/multi-pi/src/provider.ts');
+    specifier === './backend.ts' &&
+    (context.parentURL?.includes('/multi-pi/src/provider.ts') ||
+      context.parentURL?.includes('/multi-pi/src/gateway-request.ts'));
   const isPiAiImport =
     specifier === '@earendil-works/pi-ai' || specifier.startsWith('@earendil-works/pi-ai/');
   if (isBackendImport || isPiAiImport) {

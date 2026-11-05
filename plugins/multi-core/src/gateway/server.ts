@@ -48,6 +48,7 @@ import {
   harnessEndpoint,
   harnessProvider,
   isHarnessProvider,
+  type ProviderRoute,
   providerRoute,
   UnknownProviderError,
 } from './provider.ts';
@@ -258,6 +259,15 @@ export function createNativeGateway({
   }
   const rootRequests = new Map<string, MessagesRequest>();
 
+  function reviewFor(provider: Exclude<ProviderRoute, 'anthropic'>) {
+    const reviewer = provider === 'openai' ? activeRuntime.provider('openai')?.reviewer : undefined;
+    const policy =
+      provider === 'openai'
+        ? autoReviewPolicy(provider, Boolean(reviewer))
+        : (providerRegistry.get(provider)?.autoReview ?? autoReviewPolicy(provider, false));
+    return { reviewer, policy };
+  }
+
   async function serveReply(exchange: ProviderRequest, reply: MessagesResponse) {
     for (const block of reply.content) {
       stripWorkerModel(block, workerModels.remember(exchange.identity.session));
@@ -266,8 +276,7 @@ export function createNativeGateway({
     if (provider === 'anthropic') {
       throw new Error('Cannot finalise an upstream reply');
     }
-    const reviewer = provider === 'openai' ? activeRuntime.provider('openai')?.reviewer : undefined;
-    const policy = autoReviewPolicy(provider, Boolean(reviewer));
+    const { reviewer, policy } = reviewFor(provider);
     let cwd: string | undefined;
     try {
       cwd = permissionModes?.resolve(exchange.identity.session, exchange.agentId).cwd;
@@ -574,7 +583,7 @@ export function createNativeGateway({
    * A hosted-API provider (OpenAI, Zen): the provider module prepares the request,
    * this owns keepalive, events, failure mapping and the reply.
    */
-  async function handleDirect(exchange: ProviderRequest, route: 'openai' | 'zen') {
+  async function handleDirect(exchange: ProviderRequest, route: string) {
     const { res, body, url, signal, agentId, emit } = exchange;
     const prepared = prepareHosted(exchange, route);
     if (url.pathname === '/v1/messages/count_tokens') {
@@ -615,10 +624,10 @@ export function createNativeGateway({
     });
     await serveReply(exchange, result);
   }
-  function prepareHosted(exchange: ProviderRequest, route: 'openai' | 'zen'): PreparedRequest {
+  function prepareHosted(exchange: ProviderRequest, route: string): PreparedRequest {
     const { req, url, body, identity, agentId } = exchange;
     const provider = providerRegistry.get(route);
-    if (!provider?.direct) {
+    if (provider?.kind !== 'direct' || !provider.direct) {
       throw new BadRequest(`Direct provider ${route} is not registered.`);
     }
     const input = {
@@ -810,7 +819,11 @@ export function createNativeGateway({
     if (isHarnessProvider(route)) {
       return handleHarness(exchange, route);
     }
-    return handleDirect(exchange, route === 'zen' ? 'zen' : 'openai');
+    const provider = providerRegistry.get(route);
+    if (provider?.kind !== 'direct' || !provider.direct) {
+      throw new BadRequest(`Direct provider ${route} is not registered.`);
+    }
+    return handleDirect(exchange, route);
   }
   function handleMod(
     req: http.IncomingMessage,
@@ -833,10 +846,15 @@ export function createNativeGateway({
         if (classification.kind !== 'provider' || classification.route === 'anthropic') {
           return undefined;
         }
-        return autoReviewPolicy(
-          classification.route,
-          Boolean(activeRuntime.provider('openai')?.reviewer),
-        ).statement;
+        const policy =
+          classification.route === 'openai'
+            ? autoReviewPolicy(
+                classification.route,
+                Boolean(activeRuntime.provider('openai')?.reviewer),
+              )
+            : (providerRegistry.get(classification.route)?.autoReview ??
+              autoReviewPolicy(classification.route, false));
+        return policy.statement;
       },
       permissionModes,
       compactions,

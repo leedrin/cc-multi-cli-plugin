@@ -137,7 +137,7 @@ test('generic discovered models are activated in ProviderRuntime', () => {
 
 test('launcher takes enabled credentials before discovery and isolates each provider context', async () => {
   const seen: Record<string, NodeJS.ProcessEnv> = {};
-  const make = (id: 'deepseek' | 'strata', credential: string): ProviderDescriptor => ({
+  const make = (id: 'zai' | 'strata', credential: string): ProviderDescriptor => ({
     id,
     plugin: 'pi',
     label: id,
@@ -158,28 +158,73 @@ test('launcher takes enabled credentials before discovery and isolates each prov
     discoverModels: async () => [],
     unavailableMessage: `${id} unavailable`,
   });
-  const deepseek = make('deepseek', 'DEEPSEEK_API_KEY');
+  const zai = make('zai', 'ZAI_API_KEY');
   const strata = make('strata', 'STRATA_API_KEY');
   const registryFactory = () => {
     const registry = createBuiltinRegistry();
-    registry.register(deepseek);
+    registry.register(zai);
     registry.register(strata);
     return registry;
   };
   const env: NodeJS.ProcessEnv = {
-    DEEPSEEK_API_KEY: 'deepseek-secret',
+    ZAI_API_KEY: 'zai-secret',
     STRATA_API_KEY: 'strata-secret',
     KEEP: 'visible',
   };
-  await discoverLaunchProviders(registryFactory, ['deepseek', 'strata'], {
+  await discoverLaunchProviders(registryFactory, ['zai', 'strata'], {
     env,
     platform: 'linux',
   });
   assert.deepEqual(env, { KEEP: 'visible' });
-  assert.equal(seen.deepseek?.DEEPSEEK_API_KEY, 'deepseek-secret');
-  assert.equal(seen.deepseek?.STRATA_API_KEY, undefined);
+  assert.equal(seen.zai?.ZAI_API_KEY, 'zai-secret');
+  assert.equal(seen.zai?.STRATA_API_KEY, undefined);
   assert.equal(seen.strata?.STRATA_API_KEY, 'strata-secret');
-  assert.equal(seen.strata?.DEEPSEEK_API_KEY, undefined);
+  assert.equal(seen.strata?.ZAI_API_KEY, undefined);
+});
+
+test('real launch registry scrubs DeepSeek only when enabled and isolates other provider contexts', async () => {
+  const otherContexts: Array<string | undefined> = [];
+  const otherProvider: ProviderDescriptor = {
+    id: 'zai',
+    plugin: 'pi',
+    label: 'Z.AI',
+    kind: 'direct',
+    autoReview: { review: 'none', statement: 'No reviewer' },
+    unavailableMessage: 'Z.AI unavailable',
+    direct: {
+      signaturePrefixes: [],
+      prepare: () => {
+        throw new Error('not invoked');
+      },
+    },
+    availability: async (context) => {
+      otherContexts.push(context.env.DEEPSEEK_API_KEY);
+      return { available: true };
+    },
+    discoverModels: async () => [],
+  };
+  const registryFactory = () => {
+    const registry = createLaunchRegistry();
+    registry.register(otherProvider);
+    return registry;
+  };
+  const enabledEnv: NodeJS.ProcessEnv = { DEEPSEEK_API_KEY: 'fake-deepseek-key' };
+  const enabled = await discoverLaunchProviders(registryFactory, ['deepseek', 'zai'], {
+    env: enabledEnv,
+    platform: 'linux',
+  });
+  assert.equal(enabled.deepseekKey, 'fake-deepseek-key');
+  assert.equal(enabledEnv.DEEPSEEK_API_KEY, undefined);
+  assert.deepEqual(otherContexts, [undefined]);
+
+  const disabledEnv: NodeJS.ProcessEnv = { DEEPSEEK_API_KEY: 'fake-disabled-key' };
+  const disabled = await discoverLaunchProviders(registryFactory, ['zai'], {
+    env: disabledEnv,
+    platform: 'linux',
+  });
+  assert.equal(disabled.deepseekKey, undefined);
+  assert.equal(disabledEnv.DEEPSEEK_API_KEY, 'fake-disabled-key');
+  assert.deepEqual(otherContexts, [undefined, 'fake-disabled-key']);
 });
 
 test('main scrubs the real host before help and every startup probe, forwarding win32 selection', async () => {
@@ -293,8 +338,10 @@ test('launcher discovery and runtime share a registry factory without duplicate 
     },
     unavailableMessage: 'Strata unavailable',
   } satisfies ProviderDescriptor;
-  const receivedCredentials: Array<{ authFile?: string; zenKey?: string } | undefined> = [];
-  const factory = (credentials?: { authFile?: string; zenKey?: string }) => {
+  const receivedCredentials: Array<
+    { authFile?: string; zenKey?: string; deepseekKey?: string } | undefined
+  > = [];
+  const factory = (credentials?: { authFile?: string; zenKey?: string; deepseekKey?: string }) => {
     receivedCredentials.push(credentials);
     const registry = createBuiltinRegistry(credentials);
     if (!registry.get('strata')) {
@@ -315,6 +362,7 @@ test('launcher discovery and runtime share a registry factory without duplicate 
     undefined,
     discovery.genericModels,
     factory,
+    'fake-deepseek-key',
   );
   assert.deepEqual(
     runtime
@@ -326,9 +374,19 @@ test('launcher discovery and runtime share a registry factory without duplicate 
   assert.ok(runtime.registry?.get('strata')?.direct);
   assert.ok(runtime.registry?.get('openai')?.direct);
   assert.ok(runtime.registry?.get('zen')?.direct);
+  const deepseekAdapter = runtime.registry?.get('deepseek')?.direct;
+  assert.ok(deepseekAdapter);
+  const deepseekPrepared = deepseekAdapter.prepare({
+    method: 'POST',
+    pathname: '/v1/messages',
+    body: { model: 'multi/deepseek/deepseek-v4-pro', messages: [{ role: 'user', content: 'hi' }] },
+    session: 'session',
+    fallbackSession: 'fallback',
+  });
+  assert.equal(deepseekPrepared.route, 'deepseek');
   assert.deepEqual(receivedCredentials, [
     undefined,
-    { authFile: 'auth-file', zenKey: 'zen-secret' },
+    { authFile: 'auth-file', zenKey: 'zen-secret', deepseekKey: 'fake-deepseek-key' },
   ]);
   assert.equal(runtime.active().filter(({ descriptor }) => descriptor.id === 'openai').length, 1);
   assert.equal(runtime.active().filter(({ descriptor }) => descriptor.id === 'zen').length, 1);

@@ -6,7 +6,12 @@ import type {
   MessagesResponse,
   ResponseContentBlock,
 } from '../../multi-core/src/gateway/messages.ts';
+import {
+  openAIProtocolUsage,
+  responseUsageMetadata,
+} from '../../multi-core/src/gateway/response-usage.ts';
 import { originalToolNames } from '../../multi-core/src/gateway/tools.ts';
+import type { CanonicalTokenUsage } from '../../multi-core/src/gateway/usage-accounting.ts';
 import { stripWorkerModel } from '../../multi-core/src/gateway/worker-models.ts';
 import { encodePiSignature } from './signature.ts';
 
@@ -21,7 +26,9 @@ export interface PiStreamOptions {
   model: string;
   request: MessagesRequest;
   rememberWorkerModel?: (id: string, type: string, model: string) => void;
-  onUsage?: (message: AssistantMessage) => void;
+  usage?: () => CanonicalTokenUsage;
+  inputTokens?: number;
+  notice?: string;
 }
 
 interface OpenBlock {
@@ -128,9 +135,17 @@ class PiStreamTranslator {
         content: [],
         stop_reason: null,
         stop_sequence: null,
-        usage: { input_tokens: 0, output_tokens: 0 },
+        usage: { input_tokens: this.options.inputTokens ?? 0, output_tokens: 0 },
       },
     });
+    if (this.options.notice) {
+      const index = this.nextIndex++;
+      const text = `[DeepSeek] ${this.options.notice}`;
+      this.emit('content_block_start', { index, content_block: { type: 'text', text: '' } });
+      this.emit('content_block_delta', { index, delta: { type: 'text_delta', text } });
+      this.emit('content_block_stop', { index });
+      this.content.push({ type: 'text', text });
+    }
   }
 
   private assertStarted(): void {
@@ -258,7 +273,7 @@ class PiStreamTranslator {
 
   private finish(event: Extract<AssistantMessageEvent, { type: 'done' }>): MessagesResponse {
     this.closeBlock();
-    this.options.onUsage?.(event.message);
+    const canonical = this.options.usage?.() ?? { source: 'unavailable' };
     const stop_reason = this.stopReason(event.reason);
     return {
       id: this.messageId,
@@ -268,7 +283,8 @@ class PiStreamTranslator {
       content: this.content,
       stop_reason,
       stop_sequence: null,
-      usage: { input_tokens: 0, output_tokens: 0 },
+      usage: openAIProtocolUsage(canonical),
+      multi_usage: responseUsageMetadata(canonical, this.options.model),
     };
   }
 
@@ -291,7 +307,7 @@ class PiStreamTranslator {
 export function translatePiStream(
   input: PiStreamInput,
   options: PiStreamOptions,
-  emit: Emit,
+  emit?: Emit,
 ): Promise<MessagesResponse> {
-  return new PiStreamTranslator(options, emit).translate(input);
+  return new PiStreamTranslator(options, emit ?? (() => {})).translate(input);
 }

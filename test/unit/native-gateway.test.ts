@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { TestContext } from 'node:test';
 import test from 'node:test';
+import { createBuiltinRegistry } from '../../plugins/multi-core/src/gateway/builtin-providers.ts';
 import type { GatewayFetch } from '../../plugins/multi-core/src/gateway/fetch.ts';
 import type {
   MessagesRequest,
@@ -1467,4 +1468,79 @@ test('provider routing sends each external model to one handler route', async (t
     );
     assert.deepEqual(touched, [row.hit], row.label);
   }
+});
+
+test('DeepSeek 403 adds credential help without exposing upstream details', async (t) => {
+  const registry = createBuiltinRegistry({ deepseekKey: 'fake-key-do-not-leak' });
+  const call = await gateway(
+    t,
+    async () =>
+      new Response('UPSTREAM_SECRET fake-key-do-not-leak', {
+        status: 403,
+        headers: { 'content-type': 'text/plain' },
+      }),
+    { registry },
+  );
+  const response = await call({
+    model: 'multi/deepseek/deepseek-v4-pro',
+    messages: [{ role: 'user', content: 'hello' }],
+  });
+  const text = await response.text();
+  assert.equal(response.status, 403);
+  assert.match(text, /Check DEEPSEEK_API_KEY\./);
+  assert.doesNotMatch(text, /UPSTREAM_SECRET|fake-key-do-not-leak/);
+});
+
+test('DeepSeek routes through its registered Direct adapter and counts tokens locally', async (t) => {
+  const registry = createBuiltinRegistry();
+  const deepseek = registry.get('deepseek');
+  assert.ok(deepseek?.kind === 'direct' && deepseek.direct);
+  let prepares = 0;
+  let opens = 0;
+  deepseek.direct.prepare = (input) => {
+    prepares += 1;
+    assert.equal(input.body.model, 'multi/deepseek/deepseek-v4-pro');
+    return {
+      label: 'DeepSeek',
+      authHelp: ' Check DEEPSEEK_API_KEY.',
+      endpoint: 'chat/completions',
+      route: 'deepseek',
+      inputTokens: () => 17,
+      requestEvent: () => ({ route: 'deepseek-request' }),
+      failureEvent: (status) => ({ route: 'deepseek', status }),
+      open: async () => {
+        opens += 1;
+        return {
+          ok: true,
+          translate: async () => ({
+            id: 'msg_test',
+            type: 'message',
+            role: 'assistant',
+            model: 'multi/deepseek/deepseek-v4-pro',
+            content: [],
+            stop_reason: 'end_turn',
+            stop_sequence: null,
+            usage: { input_tokens: 0, output_tokens: 0 },
+          }),
+        };
+      },
+    };
+  };
+  const call = await gateway(t, async () => assert.fail('Direct adapter owns this request'), {
+    registry,
+  });
+  const payload = {
+    model: 'multi/deepseek/deepseek-v4-pro',
+    messages: [{ role: 'user', content: 'hi' }],
+  };
+  const counted = await call(payload, {}, '/v1/messages/count_tokens');
+  assert.equal(counted.status, 200);
+  assert.equal(counted.headers.get('x-multi-token-count'), 'estimate');
+  assert.deepEqual(await counted.json(), { input_tokens: 17 });
+  assert.equal(opens, 0, 'count_tokens must not open the provider');
+
+  const response = await call(payload);
+  assert.equal(response.status, 200);
+  assert.equal(prepares, 2);
+  assert.equal(opens, 1);
 });

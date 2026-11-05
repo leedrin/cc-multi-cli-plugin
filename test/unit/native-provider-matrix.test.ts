@@ -308,9 +308,9 @@ test('provider matrix: picker rows resolve to one worker type per provider', () 
   }
 });
 
-test('provider matrix: the usage dashboard lists all five providers in a stable order', async () => {
+test('provider matrix: the usage dashboard lists all six providers in a stable order', async () => {
   const dashboard = new ProviderUsageDashboard({
-    enabled: ['openai', 'cursor', 'zen'],
+    enabled: ['openai', 'cursor', 'zen', 'deepseek'],
     openai: async () => ({ summary: 'openai quota', details: [] }),
   });
   const view = await dashboard.read('s', new ReceiptLedger().snapshot());
@@ -320,9 +320,24 @@ test('provider matrix: the usage dashboard lists all five providers in a stable 
       ['openai', 'OpenAI / Codex', 'ready'],
       ['cursor', 'Cursor', 'unavailable'],
       ['zen', 'OpenCode Zen', 'unavailable'],
+      ['deepseek', 'DeepSeek', 'unavailable'],
       ['antigravity', 'Antigravity', 'disabled'],
       ['grok', 'Grok Build', 'disabled'],
     ],
   );
   assert.equal(view.providers[0].summary, 'openai quota');
+  const deepseek = view.providers.find(({ id }) => id === 'deepseek');
+  assert(deepseek);
+  assert.deepEqual(
+    [deepseek.status, deepseek.url, deepseek.details],
+    [
+      'unavailable',
+      'https://platform.deepseek.com/usage',
+      [
+        'DeepSeek exposes no account quota here; session tokens appear in receipts.',
+        'Check the DeepSeek platform console for balance and charges.',
+        'This session: 0 completed requests',
+      ],
+    ],
+  );
 });

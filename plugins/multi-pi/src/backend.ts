@@ -1,5 +1,7 @@
+import type { Context } from '@earendil-works/pi-ai';
+import type { OpenAICompletionsOptions } from '@earendil-works/pi-ai/api/openai-completions';
 import { deepseekProvider } from '@earendil-works/pi-ai/providers/deepseek';
-import type { TranscriptContext } from '@earendil-works/pi-ai/utils/transcript';
+import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript';
 import type { PiCatalogModel } from './catalog.ts';
 
 type PiProvider = ReturnType<typeof deepseekProvider>;
@@ -10,10 +12,12 @@ type PiEvent = Exclude<Awaited<ReturnType<PiIterator['next']>>['value'], undefin
 
 export interface PiStreamRequest {
   model: PiCatalogModel;
-  context: TranscriptContext;
+  context: Context;
   apiKey: string;
   signal?: AbortSignal;
   reasoningEffort?: string;
+  options?: Pick<OpenAICompletionsOptions, 'maxTokens' | 'toolChoice'>;
+  onProviderStreamEvent?: (chunk: unknown) => void;
   fetch?: typeof globalThis.fetch;
   label: string;
 }
@@ -22,6 +26,18 @@ export interface OpenPiStreamResult {
   model: PiModel;
   first: PiEvent;
   stream: AsyncIterable<PiEvent>;
+}
+
+export class PiUpstreamStatus extends Error {
+  readonly status: number;
+  readonly retryAfter: string | null;
+
+  constructor(status: number, retryAfter: string | null) {
+    super(`DeepSeek returned HTTP ${status}.`);
+    this.name = 'PiUpstreamStatus';
+    this.status = status;
+    this.retryAfter = retryAfter;
+  }
 }
 
 const deepseek = deepseekProvider();
@@ -60,9 +76,9 @@ export function createPiFetch(
   };
 }
 
-function safeError(label: string, status: number | undefined): Error {
+function safeError(label: string, status: number | undefined, retryAfter: string | null): Error {
   if (status !== undefined) {
-    return new Error(`${label} returned HTTP ${status}.`);
+    return new PiUpstreamStatus(status, retryAfter);
   }
   return new Error(`${label} request failed.`);
 }
@@ -81,11 +97,16 @@ export async function openPiStream(request: PiStreamRequest): Promise<OpenPiStre
     thinkingLevelMap: request.model.thinkingLevelMap,
   };
   let status: number | undefined;
-  const events = deepseek.stream(requestModel, request.context, {
+  let retryAfter: string | null = null;
+  const events = deepseek.stream(requestModel, normalizeContext(request.context), {
     apiKey: request.apiKey,
     env: {},
     cacheRetention: 'short',
     maxRetries: 0,
+    ...request.options,
+    ...(request.onProviderStreamEvent
+      ? { onProviderStreamEvent: (chunk: unknown) => request.onProviderStreamEvent?.(chunk) }
+      : {}),
     reasoningEffort: request.reasoningEffort as
       | 'minimal'
       | 'low'
@@ -97,6 +118,7 @@ export async function openPiStream(request: PiStreamRequest): Promise<OpenPiStre
     ...(request.signal ? { signal: request.signal } : {}),
     fetch: createPiFetch(request.fetch ?? globalThis.fetch, (response) => {
       status = response.status;
+      retryAfter = response.headers.get('retry-after');
     }),
   });
   const iterator = events[Symbol.asyncIterator]();
@@ -106,22 +128,22 @@ export async function openPiStream(request: PiStreamRequest): Promise<OpenPiStre
       throw new Error('aborted');
     }
     if (first.done) {
-      throw safeError(request.label, status);
+      throw safeError(request.label, status, retryAfter);
     }
     if (first.value.type === 'error') {
-      throw safeError(request.label, status);
+      throw safeError(request.label, status, retryAfter);
     }
     if (first.value.type !== 'start') {
-      throw safeError(request.label, status);
+      throw safeError(request.label, status, retryAfter);
     }
     const stream: AsyncIterable<PiEvent> = {
       [Symbol.asyncIterator]: () => iterator,
     };
     return { model: requestModel, first: first.value, stream };
   } catch (error) {
-    if (request.signal?.aborted) {
+    if (request.signal?.aborted || error instanceof PiUpstreamStatus) {
       throw error;
     }
-    throw safeError(request.label, status);
+    throw safeError(request.label, status, retryAfter);
   }
 }

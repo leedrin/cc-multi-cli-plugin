@@ -38,6 +38,29 @@ test('Pi keyless runtime discovery does not load backend or pi-ai', () => {
   assert.equal(result.error, undefined);
 });
 
+test('count_tokens estimates in a child process without loading the Pi backend', () => {
+  const requestUrl = new URL('../../plugins/multi-pi/src/gateway-request.ts', import.meta.url).href;
+  const loaderUrl = new URL('./fixtures/native-pi-import-boundary-loader.mjs', import.meta.url)
+    .href;
+  const script = `
+    const { preparePiRequest } = await import(${JSON.stringify(requestUrl)});
+    const prepared = preparePiRequest({
+      method: 'POST',
+      pathname: '/v1/messages/count_tokens',
+      body: { model: 'multi/deepseek/deepseek-v4-pro', messages: [{ role: 'user', content: 'hello' }] },
+      session: 'session', fallbackSession: 'fallback'
+    }, 'fake-key');
+    if (prepared.inputTokens() < 1) throw new Error('Missing local token estimate');
+  `;
+  const result = spawnSync(
+    process.execPath,
+    ['--no-warnings', '--experimental-loader', loaderUrl, '--input-type=module', '-e', script],
+    { encoding: 'utf8', timeout: 10000 },
+  );
+  assert.equal(result.status, 0, `${result.stdout}\\n${result.stderr}`);
+  assert.equal(result.error, undefined);
+});
+
 test('Pi model discovery loads its backend only when a key is present', async () => {
   let calls = 0;
   const loader = async () => {

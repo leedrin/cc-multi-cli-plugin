@@ -3,7 +3,10 @@ import type {
   ProviderDescriptor,
   ProviderDiscoveryContext,
 } from '../../multi-core/src/gateway/provider-registry.ts';
+import type { ProviderRequestInput } from '../../multi-core/src/gateway/provider-request.ts';
 import { filterPiModels, toPiModelDescriptors } from './catalog.ts';
+import { preparePiRequest } from './gateway-request.ts';
+import { PI_SIGNATURE_PREFIX } from './signature.ts';
 
 type PiBackendLoader = () => Promise<typeof import('./backend.ts')>;
 
@@ -39,5 +42,32 @@ export const deepseekDescriptor: ProviderDescriptor = {
     return apiKey?.trim() ? { available: true } : { available: false, reason: deepseekUnavailable };
   },
   discoverModels: discoverPiModels,
-  // The direct adapter is added in T032.
+  direct: {
+    signaturePrefixes: [PI_SIGNATURE_PREFIX],
+    prepare: () => {
+      throw new Error(deepseekUnavailable);
+    },
+  },
 };
+
+export interface PiProviderCredentials {
+  apiKey?: string;
+}
+
+export function bindPiProvider({ apiKey }: PiProviderCredentials): ProviderDescriptor {
+  const validatedKey = apiKey?.trim() ? apiKey : undefined;
+  return {
+    ...deepseekDescriptor,
+    direct: {
+      signaturePrefixes: [PI_SIGNATURE_PREFIX],
+      prepare: (input: ProviderRequestInput) => {
+        if (!validatedKey) {
+          throw new Error(deepseekUnavailable);
+        }
+        return preparePiRequest(input, validatedKey, {
+          loadBackend: () => import('./backend.ts'),
+        });
+      },
+    },
+  };
+}

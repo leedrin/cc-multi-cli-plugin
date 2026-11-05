@@ -6,6 +6,9 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for current direction and
 
 ## Unreleased
 
+- **Use DeepSeek through Pi.** DeepSeek is available as a direct provider through the curated Pi catalog, with local token estimates and canonical upstream usage.
+- **Explain hosted-provider 403 failures.** OpenAI, Zen, and DeepSeek authentication failures now include the provider's credential help for HTTP 403 responses.
+
 - **Keep enabled provider API keys out of child processes.** Multi now removes enabled providers' credential environment variables from its process environment before provider discovery and passes each key only to its owning provider. With Zen enabled, `OPENCODE_API_KEY` is also withheld from child processes.
 
 - **BREAKING: Unknown `multi/<provider>/` models are rejected.** These models used

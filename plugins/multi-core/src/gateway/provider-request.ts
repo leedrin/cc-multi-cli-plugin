@@ -14,7 +14,9 @@ export class UpstreamFailure extends Error {
   status: number;
   retryAfter: string | null;
   constructor(status: number, retryAfter: string | null, provider: string, authHelp: string) {
-    super(`${provider} returned HTTP ${status}.${status === 401 ? authHelp : ''}`);
+    super(
+      `${provider} returned HTTP ${status}.${status === 401 || status === 403 ? authHelp : ''}`,
+    );
     this.status = status;
     this.retryAfter = retryAfter;
   }

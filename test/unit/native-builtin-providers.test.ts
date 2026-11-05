@@ -19,8 +19,13 @@ import { CURSOR_TOOLS } from '../../plugins/multi-cursor/src/progress.ts';
 import { GROK_TOOLS } from '../../plugins/multi-grok/src/permissions.ts';
 import { removeTemporary } from '../temporary.ts';
 
-const BUILTIN_IDS = ['openai', 'zen', 'cursor', 'antigravity', 'grok'];
-const LEGACY_SIGNATURE_PREFIXES = ['multi-openai:', 'multi-zen-responses:', 'multi-zen-chat:'];
+const BUILTIN_IDS = ['openai', 'zen', 'deepseek', 'cursor', 'antigravity', 'grok'];
+const LEGACY_SIGNATURE_PREFIXES = [
+  'multi-openai:',
+  'multi-zen-responses:',
+  'multi-zen-chat:',
+  'multipi:v1:',
+];
 const LEGACY_AUTO_REVIEW = {
   openai: { review: 'reviewer', statement: 'reviewed by the OpenAI account reviewer' },
   zen: { review: 'none', statement: 'no auto mode: actions run unreviewed' },
@@ -50,8 +55,9 @@ test('harness descriptors expose their native display tools', () => {
   }
 });
 
-test('built-in registry registers five provider descriptors with matching facts', () => {
+test('built-in registry registers six provider descriptors with matching facts', () => {
   const registry = createBuiltinRegistry();
+  assert.equal(registry.list().length, 6);
   assert.deepEqual(
     registry.list().map(({ id }) => id),
     BUILTIN_IDS,
@@ -72,6 +78,13 @@ test('Registry prefixes, review policies, and harness unavailable messages retai
     [...LEGACY_SIGNATURE_PREFIXES].sort(),
   );
   for (const descriptor of BUILTIN_PROVIDERS) {
+    if (descriptor.id === 'deepseek') {
+      assert.deepEqual(descriptor.autoReview, {
+        review: 'none',
+        statement: 'no auto mode: actions run unreviewed',
+      });
+      continue;
+    }
     const id = descriptor.id as keyof typeof LEGACY_AUTO_REVIEW;
     assert.deepEqual(descriptor.autoReview, LEGACY_AUTO_REVIEW[id]);
     assert.deepEqual(PROVIDER_AUTO_REVIEW[id], LEGACY_AUTO_REVIEW[id]);

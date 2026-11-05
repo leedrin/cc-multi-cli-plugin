@@ -32,6 +32,15 @@ const USAGE_ROWS = [
     ],
   },
   {
+    id: 'deepseek',
+    name: 'DeepSeek',
+    url: 'https://platform.deepseek.com/usage',
+    unavailable: [
+      'DeepSeek exposes no account quota here; session tokens appear in receipts.',
+      'Check the DeepSeek platform console for balance and charges.',
+    ],
+  },
+  {
     id: 'antigravity',
     name: 'Antigravity',
     unavailable: [
@@ -270,6 +279,7 @@ export class ProviderUsageDashboard {
   }
 
   private async collect(session: string): Promise<ProviderUsageView> {
+    const builtInIds = new Set<string>(USAGE_ROWS.map(({ id }) => id));
     const providers: Array<{
       id: string;
       name: string;
@@ -277,13 +287,15 @@ export class ProviderUsageDashboard {
       unavailable: readonly string[];
     }> = [
       ...USAGE_ROWS,
-      ...(this.options.extraRows ?? []).map(({ id, name }) => ({
-        id,
-        name,
-        unavailable: [
-          `${name} reports no account quota; per-run usage appears in session receipts.`,
-        ],
-      })),
+      ...(this.options.extraRows ?? [])
+        .filter(({ id }) => !builtInIds.has(id))
+        .map(({ id, name }) => ({
+          id,
+          name,
+          unavailable: [
+            `${name} reports no account quota; per-run usage appears in session receipts.`,
+          ],
+        })),
     ];
     const rows = await Promise.all(
       providers.map(async (provider): Promise<ProviderUsageRow> => {
