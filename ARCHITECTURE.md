@@ -69,6 +69,28 @@ those functions are wrapped by descriptors aggregated in `builtin-providers.ts`.
 Launcher iteration over `registry.list()` for discovery and activation is planned
 (T043/T019).
 
+### Direct execution
+
+OpenAI and Zen are declared as direct providers with `DirectProviderAdapter` values containing `signaturePrefixes` and `prepare` (`plugins/multi-openai/src/provider.ts:71-102`, `plugins/multi-zen/src/provider.ts:36-77`, and the adapter contract in `plugins/multi-core/src/gateway/provider-registry.ts:66-81`).
+
+Each `prepare` call creates a `PreparedRequest`; its `open(signal, fetchImpl)` method is the single operation that opens the upstream request (`plugins/multi-core/src/gateway/provider-request.ts:83-98`, `plugins/multi-openai/src/gateway-request.ts:64-110`, and `plugins/multi-zen/src/gateway-request.ts:40-77`).
+
+The static descriptors' `prepare` functions do not read `process.env` per request; OpenAI computes its default auth-file path once at module load from `process.env` and closes over `defaultAuthFile` (`plugins/multi-openai/src/provider.ts:13-14,69-101`).
+
+The unbound Zen static descriptor's `prepare` always throws the original `zenUnavailable` message, while bound descriptors use credentials supplied when binding (`plugins/multi-zen/src/provider.ts:71-93`).
+
+`createBuiltinRegistry` passes `authFile` and `zenKey` into `registerBuiltinProviders`, which binds OpenAI and Zen through `bindOpenAIProvider` and `bindZenProvider` (`plugins/multi-core/src/gateway/builtin-providers.ts:16-42`).
+
+If a gateway receives both a registry and gateway-level `authFile` or `zen.apiKey`, creation throws an error identifying ambiguous credential ownership (`plugins/multi-core/src/gateway/server.ts:184-219`).
+
+The gateway converts a `prepare` exception to `BadRequest` before opening upstream, so preparation failures make no upstream request (`plugins/multi-core/src/gateway/server.ts:626-645` and `plugins/multi-core/src/gateway/server.ts:585-602`).
+
+A `count_tokens` request prepares locally and uses only `inputTokens()`; it returns before `open` (`plugins/multi-core/src/gateway/server.ts:585-594`).
+
+For other direct requests the gateway passes a signal combining client disconnect and gateway abort to `open`, and both provider adapters forward that signal to upstream fetch (`plugins/multi-core/src/gateway/server.ts:597-601`, `plugins/multi-openai/src/gateway-request.ts:78-97`, and `plugins/multi-zen/src/gateway-request.ts:48-63`).
+
+`server.ts` does not import provider plugin modules directly; `test/unit/native-direct-boundary.test.ts` locks this import boundary (`plugins/multi-core/src/gateway/server.ts:1-67` and `test/unit/native-direct-boundary.test.ts:306-311`).
+
 ## Request flow
 
 Claude Code sends Anthropic Messages traffic and provider requests to the gateway.

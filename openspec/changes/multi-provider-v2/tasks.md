@@ -34,7 +34,7 @@
 - [x] 4.2 MP-0302：`handleHosted` 重命名为 `handleDirect`，只经 `open` 打开上游；只有 server 发送终止事件（`emitTerminal`），adapter 输出不含 `message_delta`/`message_stop`；单测断言整条流 `message_stop` 只出现一次
 - [x] 4.3 MP-0303：Zen 与 OpenAI 改为实现 `DirectProviderAdapter{prepare, signaturePrefixes}`；`native-zen-*`、`native-openai-*` 测试断言不变
 - [x] 4.4 MP-0304：准备失败返回 BadRequest 且无上游请求；客户端断开时 signal 传到上游且只发一次请求；`gw/server.ts` 不 import `plugins/multi-*`（加一条 import 断言测试）
-- [ ] 4.5 更新 `ARCHITECTURE.md` 的 Direct 执行说明；`npm run check` 通过
+- [x] 4.5 更新 `ARCHITECTURE.md` 的 Direct 执行说明；`npm run check` 通过
 
 ## 5. P4 Launcher、worker 与 usage 表驱动（MP-0401–0405、DD §7.4、§11）
 
