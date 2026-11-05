@@ -35,6 +35,40 @@ Claude Code session (/model, workers, prompts)
  Claude loop  Claude loop  provider loop
 ```
 
+## Provider structure
+
+Provider declarations are organized in three layers. The host-free fact table
+(`gateway/provider-facts.ts`) contains provider IDs, owning plugin IDs, provider
+kind, worker type, and label. Hooks and installation can use these facts without
+importing provider implementations. Model routes are encoded and decoded by
+`gateway/model-identity.ts`. Provider implementations live in each plugin's
+`src/provider.ts`: they export a typed descriptor and discovery function
+(`discoverOpenAI`, `discoverZen`, `discoverCursor`, `discoverAntigravity`, or
+`discoverGrok`) with provider-specific discovery dependencies injectable where
+supported. Provider adapters and harnesses stay in their owning plugin; the
+shared fact table and registry types do not import those implementation modules.
+`gateway/builtin-providers.ts` aggregates the built-in descriptors, and
+`gateway/provider-registry.ts` validates and stores them in `ProviderRegistry`;
+`ProviderRuntime` holds the active providers, discovered models, and harnesses.
+The registry resolves providers and models using the decoded provider/model
+identity rather than model-name prefixes.
+
+`ProviderDiscoveryContext.explicit` indicates that the provider's plugin was
+selected as enabled when the launcher built that discovery context. Its `log`
+callback lets provider discovery report unavailable choices without owning the
+launcher output channel. When `MULTI_ENABLED_PROVIDERS` is absent, discovery is
+not filtered by this selected-plugin check; when it is present, provider
+implementations can avoid discovery unless `explicit` is true.
+
+`MULTI_ENABLED_PROVIDERS` is a comma-separated list of enabled **plugin IDs**,
+not model/provider IDs. The installer supplies plugin IDs, and
+`providerSelection` expands each ID through the fact table. Thus `pi` expands to
+its declared providers (`deepseek`, `zai`, `zai-coding-cn`, and `strata`) rather
+than naming a single provider. At HEAD, the launcher calls each plugin's exported typed discovery function;
+those functions are wrapped by descriptors aggregated in `builtin-providers.ts`.
+Launcher iteration over `registry.list()` for discovery and activation is planned
+(T043/T019).
+
 ## Request flow
 
 Claude Code sends Anthropic Messages traffic and provider requests to the gateway.

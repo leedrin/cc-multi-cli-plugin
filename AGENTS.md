@@ -18,7 +18,11 @@ Claude Code function-hook UI and extensibility rules live in
 | `plugins/multi-core/src/launcher.ts` | Launches the gateway and registers models and workers. |
 | `plugins/multi-core/src/gateway/server.ts` | Routes requests and manages sessions. |
 | `plugins/multi-core/src/gateway/messages.ts`, `fetch.ts`, `tools.ts`, `responses.ts`, `bounded.ts`, `record.ts` | Shared protocol, outbound fetch, tool aliases, Responses translation and SSE reader, bounded maps, and the `isRecord` guard. |
-| `plugins/multi-core/src/gateway/provider.ts`, `provider-request.ts` | Model-prefix provider table, `nativeSpelling`, and the contract through which OpenAI and Zen modules build their own requests. |
+| `plugins/multi-core/src/gateway/provider-facts.ts` | Host-free provider facts shared with hooks and installation, including provider IDs, plugin IDs, kinds, workers, and labels. |
+| `plugins/multi-core/src/gateway/provider-registry.ts` | `ProviderRegistry`, `ProviderRuntime`, discovery context, descriptor and model types, registration validation, and provider/model resolution. |
+| `plugins/multi-core/src/gateway/model-identity.ts` | Encodes and decodes provider model routes, including presets and the `[1m]` suffix. |
+| `plugins/multi-core/src/gateway/builtin-providers.ts` | Aggregates built-in provider descriptors and registers them in a `ProviderRegistry`. |
+| `plugins/multi-core/src/gateway/provider.ts`, `provider-request.ts` | Model-route provider lookup, `nativeSpelling`, and the contract through which OpenAI and Zen modules build their own requests. |
 | `plugins/multi-core/src/gateway/executable.ts`, `process-tree.ts` | Resolves executables and manages child processes. |
 | `plugins/multi-core/src/gateway/atomic-write.ts`, `state-lock.ts` | Protects files and serializes native state. |
 | `plugins/multi-core/src/gateway/harness-settings.ts`, `mode-hook.ts`, `agent-definitions.ts`, `worker-catalog.ts` | Admits harness settings (`checkHarnessSettings`, `mergePermissions`), maps prompt and worker permissions, and resolves the Agent tool's `model` against each provider's worker catalog. |
@@ -27,11 +31,11 @@ Claude Code function-hook UI and extensibility rules live in
 | `plugins/multi-core/hooks/` | Claude Mods function hooks; `gateway.ts` is the single gateway client, state lives in `$.state`, timing in `$.clock`. |
 | `plugins/multi-core/src/gateway/harness-*.ts` | Session store, exchange registry, response builder, completion, notices, and failure classifier (`harness-failure.ts`) shared by Cursor, Antigravity, and Grok; the CLI harness base (`harness-cli.ts`), process runner, and text prompt preparation shared by Antigravity and Grok. |
 | `plugins/multi-core/src/account.ts`, `setup.ts`, `install/` | Accounts, bootstrap, plugin discovery, and installation. |
-| `plugins/multi-openai/src/` | Codex authentication, models, request construction (`gateway-request.ts`), instructions, and reviewer. |
-| `plugins/multi-cursor/src/` | Cursor SDK harness, permissions, progress, requests, models, and workspaces. |
-| `plugins/multi-zen/src/` | Zen API-key authentication, catalogs, request construction (`gateway-request.ts`), and translations. |
-| `plugins/multi-antigravity/src/` | `agy` CLI harness, models, hooks, requests, and permissions. |
-| `plugins/multi-grok/src/` | Grok Build CLI harness, models, requests, permissions, and login state. |
+| `plugins/multi-openai/src/provider.ts` | OpenAI descriptor and typed `discoverOpenAI(context, deps?)`; provider-specific discovery, request construction, authentication, instructions, and review live in the OpenAI plugin. |
+| `plugins/multi-cursor/src/provider.ts` | Cursor descriptor and typed `discoverCursor(context, required, deps?)`; provider-specific SDK harness, permissions, progress, requests, models, and workspaces live in the Cursor plugin. |
+| `plugins/multi-zen/src/provider.ts` | Zen descriptor and typed `discoverZen(context, deps?)`; provider-specific API-key authentication, catalogs, request construction, and translations live in the Zen plugin. |
+| `plugins/multi-antigravity/src/provider.ts` | Antigravity descriptor and typed `discoverAntigravity(context, deps?)`; provider-specific `agy` CLI harness, models, hooks, requests, and permissions live in the Antigravity plugin. |
+| `plugins/multi-grok/src/provider.ts` | Grok descriptor and typed `discoverGrok(context, deps?)`; provider-specific Grok Build CLI harness, models, requests, permissions, and login state live in the Grok plugin. |
 | `test/unit/` | Offline unit tests for gateway and provider behavior. |
 | `test/live/` | Opt-in checks against native CLIs and provider services. |
 | `scripts/` | Development utilities: banner generation, release versioning (`versioning.ts`), and the release CLIs. |
