@@ -51,6 +51,7 @@ import {
   providerRoute,
   UnknownProviderError,
 } from './provider.ts';
+import { PROVIDER_FACTS } from './provider-facts.ts';
 import { ProviderRuntime } from './provider-registry.ts';
 import type { PreparedRequest } from './provider-request.ts';
 import { ProviderAuthError, UpstreamFailure } from './provider-request.ts';
@@ -193,17 +194,38 @@ export function createNativeGateway({
   const dashboard =
     usageDashboard ??
     new ProviderUsageDashboard({
-      enabled: (enabledProviders ?? ['openai', 'cursor', 'zen', 'antigravity', 'grok']).filter(
-        (provider) => {
-          const active = activeRuntime.provider(provider);
-          if (provider === 'zen') {
-            return Boolean(active);
-          }
-          if (provider === 'cursor' || provider === 'antigravity' || provider === 'grok') {
-            return Boolean(active?.harness);
-          }
-          return provider === 'openai';
-        },
+      enabled: (
+        enabledProviders ?? [
+          'openai',
+          'cursor',
+          'zen',
+          'antigravity',
+          'grok',
+          ...PROVIDER_FACTS.filter(
+            ({ id }) =>
+              !['openai', 'cursor', 'zen', 'antigravity', 'grok'].includes(id) &&
+              Boolean(activeRuntime.provider(id)),
+          ).map(({ id }) => id),
+        ]
+      ).filter((provider) => {
+        const fact = PROVIDER_FACTS.find(({ id }) => id === provider);
+        if (!fact) {
+          return false;
+        }
+        if (provider === 'openai') {
+          return true;
+        }
+        const active = activeRuntime.provider(provider);
+        return fact.kind === 'harness' ? Boolean(active?.harness) : Boolean(active);
+      }),
+      extraRows: PROVIDER_FACTS.flatMap(({ id, label }) => {
+        if (['openai', 'cursor', 'zen', 'antigravity', 'grok'].includes(id)) {
+          return [];
+        }
+        return activeRuntime.provider(id) ? [{ id, name: label }] : [];
+      }),
+      extraReaders: Object.fromEntries(
+        activeProviders.flatMap(({ descriptor, usage }) => (usage ? [[descriptor.id, usage]] : [])),
       ),
       ...Object.fromEntries(
         activeProviders.flatMap(({ descriptor, usage }) => (usage ? [[descriptor.id, usage]] : [])),

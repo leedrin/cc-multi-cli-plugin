@@ -50,8 +50,9 @@ const USAGE_ROWS = [
   },
 ] as const;
 type UsageProvider = (typeof USAGE_ROWS)[number]['id'];
+type UsageProviderId = string;
 interface ProviderUsageRow {
-  id: UsageProvider;
+  id: UsageProviderId;
   name: string;
   status: 'ready' | 'unavailable' | 'disabled' | 'error';
   summary: string;
@@ -66,6 +67,8 @@ export interface ProviderUsageView {
 }
 export interface ProviderUsageOptions extends Partial<Record<UsageProvider, ProviderUsageReader>> {
   enabled: readonly string[];
+  extraRows?: readonly { id: string; name: string }[];
+  extraReaders?: Readonly<Record<string, ProviderUsageReader>>;
   now?: () => number;
 }
 export type ProviderUsageReader = (session: string) => Promise<{
@@ -105,7 +108,7 @@ function canonicalOf(totals: UsageTotalsV2): CanonicalTokenUsage {
 /** One provider's session usage from the ledger snapshot, or nothing before its first request. */
 function sessionUsage(
   snapshot: UsageSnapshot,
-  provider: UsageProvider,
+  provider: UsageProviderId,
 ): ProviderSessionUsage | undefined {
   const entries = snapshot.entries.filter((entry) => entry.provider === provider);
   if (entries.length === 0) {
@@ -267,8 +270,23 @@ export class ProviderUsageDashboard {
   }
 
   private async collect(session: string): Promise<ProviderUsageView> {
+    const providers: Array<{
+      id: string;
+      name: string;
+      url?: string;
+      unavailable: readonly string[];
+    }> = [
+      ...USAGE_ROWS,
+      ...(this.options.extraRows ?? []).map(({ id, name }) => ({
+        id,
+        name,
+        unavailable: [
+          `${name} reports no account quota; per-run usage appears in session receipts.`,
+        ],
+      })),
+    ];
     const rows = await Promise.all(
-      USAGE_ROWS.map(async (provider): Promise<ProviderUsageRow> => {
+      providers.map(async (provider): Promise<ProviderUsageRow> => {
         const row: ProviderUsageRow = {
           id: provider.id,
           name: provider.name,
@@ -285,7 +303,8 @@ export class ProviderUsageDashboard {
             details: [],
           };
         }
-        const reader = this.options[provider.id];
+        const reader =
+          this.options.extraReaders?.[provider.id] ?? this.options[provider.id as UsageProvider];
         if (!reader) {
           return row;
         }

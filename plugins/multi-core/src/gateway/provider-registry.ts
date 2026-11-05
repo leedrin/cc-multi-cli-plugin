@@ -3,7 +3,7 @@ import type { NativeHarness } from './native-harness.ts';
 import type { AutoReviewPolicy } from './provider.ts';
 import { PROVIDER_FACTS } from './provider-facts.ts';
 import type { PreparedRequest, ProviderRequestInput } from './provider-request.ts';
-import type { ProviderUsageReader as ProviderUsageCallback } from './provider-usage.ts';
+import type { ProviderUsageReader } from './provider-usage.ts';
 import type { Reviewer } from './verdicts.ts';
 
 type ProviderKind = 'direct' | 'harness';
@@ -61,10 +61,6 @@ export interface ModelDescriptor {
 
 type NativeHarnessFactoryContext = ProviderDiscoveryContext;
 
-interface ProviderUsageReader {
-  read(...args: never[]): unknown;
-}
-
 interface DirectProviderAdapter {
   prepare(input: ProviderRequestInput): PreparedRequest;
   signaturePrefixes: readonly string[];
@@ -94,7 +90,7 @@ export interface ActiveProvider {
   models: readonly ModelDescriptor[];
   harness?: NativeHarness;
   reviewer?: Reviewer;
-  usage?: ProviderUsageCallback;
+  usage?: ProviderUsageReader;
 }
 
 export interface ResolvedProviderModel {

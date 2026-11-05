@@ -607,7 +607,11 @@ function genericRuntimeProviders(
     if (!descriptor) {
       throw new Error(`Missing provider descriptor for discovered provider: ${id}`);
     }
-    active.push({ descriptor, models });
+    active.push({
+      descriptor,
+      models,
+      ...(descriptor.usage ? { usage: descriptor.usage } : {}),
+    });
   }
   return active;
 }
