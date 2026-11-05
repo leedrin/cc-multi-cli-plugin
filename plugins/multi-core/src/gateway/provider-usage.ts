@@ -9,7 +9,47 @@ import {
   type UsageTotalsV2,
 } from './usage-accounting.ts';
 
-type UsageProvider = 'openai' | 'cursor' | 'zen' | 'antigravity' | 'grok';
+const USAGE_ROWS = [
+  {
+    id: 'openai',
+    name: 'OpenAI / Codex',
+    url: 'https://chatgpt.com/codex/settings/usage',
+    unavailable: ['Sign in with codex login to read account quota windows.'],
+  },
+  {
+    id: 'cursor',
+    name: 'Cursor',
+    url: 'https://cursor.com/dashboard?tab=usage',
+    unavailable: ['Sign in with the Cursor SDK to read subscription quota.'],
+  },
+  {
+    id: 'zen',
+    name: 'OpenCode Zen',
+    url: 'https://opencode.ai/zen',
+    unavailable: [
+      'Go subscription quota requires a supported Zen API key.',
+      'Check the Zen billing console for credits and charges.',
+    ],
+  },
+  {
+    id: 'antigravity',
+    name: 'Antigravity',
+    unavailable: [
+      'Native Antigravity account quota could not be retrieved.',
+      'Run /usage or /credits inside agy to view your account.',
+    ],
+  },
+  {
+    id: 'grok',
+    name: 'Grok Build',
+    url: 'https://x.ai/build',
+    unavailable: [
+      'Grok Build exposes no account quota; per-run cost appears in session receipts.',
+      'Run grok login if the browser credential has expired.',
+    ],
+  },
+] as const;
+type UsageProvider = (typeof USAGE_ROWS)[number]['id'];
 interface ProviderUsageRow {
   id: UsageProvider;
   name: string;
@@ -24,13 +64,8 @@ export interface ProviderUsageView {
   updatedAt: string;
   providers: ProviderUsageRow[];
 }
-export interface ProviderUsageOptions {
+export interface ProviderUsageOptions extends Partial<Record<UsageProvider, ProviderUsageReader>> {
   enabled: readonly string[];
-  openai?: ProviderUsageReader;
-  cursor?: ProviderUsageReader;
-  zen?: ProviderUsageReader;
-  antigravity?: ProviderUsageReader;
-  grok?: ProviderUsageReader;
   now?: () => number;
 }
 export type ProviderUsageReader = (session: string) => Promise<{
@@ -38,30 +73,6 @@ export type ProviderUsageReader = (session: string) => Promise<{
   details: string[];
   status?: ProviderUsageRow['status'];
 }>;
-const providers = [
-  { id: 'openai', name: 'OpenAI / Codex', url: 'https://chatgpt.com/codex/settings/usage' },
-  { id: 'cursor', name: 'Cursor', url: 'https://cursor.com/dashboard?tab=usage' },
-  { id: 'zen', name: 'OpenCode Zen', url: 'https://opencode.ai/zen' },
-  { id: 'antigravity', name: 'Antigravity' },
-  { id: 'grok', name: 'Grok Build', url: 'https://x.ai/build' },
-] as const;
-const unavailable: Record<UsageProvider, string[]> = {
-  openai: ['Sign in with codex login to read account quota windows.'],
-  cursor: ['Sign in with the Cursor SDK to read subscription quota.'],
-  zen: [
-    'Go subscription quota requires a supported Zen API key.',
-    'Check the Zen billing console for credits and charges.',
-  ],
-  antigravity: [
-    'Native Antigravity account quota could not be retrieved.',
-    'Run /usage or /credits inside agy to view your account.',
-  ],
-  grok: [
-    'Grok Build exposes no account quota; per-run cost appears in session receipts.',
-    'Run grok login if the browser credential has expired.',
-  ],
-};
-
 /** What a provider's requests in one session reported, structured so a UI never parses text. */
 interface ProviderSessionUsage {
   requests: number;
@@ -257,12 +268,14 @@ export class ProviderUsageDashboard {
 
   private async collect(session: string): Promise<ProviderUsageView> {
     const rows = await Promise.all(
-      providers.map(async (provider): Promise<ProviderUsageRow> => {
+      USAGE_ROWS.map(async (provider): Promise<ProviderUsageRow> => {
         const row: ProviderUsageRow = {
-          ...provider,
+          id: provider.id,
+          name: provider.name,
+          ...('url' in provider ? { url: provider.url } : {}),
           status: 'unavailable',
           summary: 'Account usage unavailable',
-          details: unavailable[provider.id],
+          details: [...provider.unavailable],
         };
         if (!this.options.enabled.includes(provider.id)) {
           return {

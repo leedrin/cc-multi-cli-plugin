@@ -26,22 +26,22 @@
 - [x] 3.3 MP-0203：OpenAI、Zen、Cursor、Antigravity、Grok 各在 `src/provider.ts` 提供描述符（auto-review 策略、签名前缀、worker 信息）；`gw/provider.ts` 的 `PROVIDERS`、`PROVIDER_AUTO_REVIEW` 和 `gw/server.ts:76` 的 `FOREIGN_SIGNATURE_PREFIXES` 改由 Registry 汇总；`native-verdicts`、`native-reviewer-discovery` 测试断言不变
 - [ ] 3.4 fake provider 测试：只加一个描述符和一行事实，就出现在 picker、worker 和 usage 中，且未修改 gateway 核心文件
 - [x] 3.5 插件启用按插件 ID 判断（`core/install/plugins.ts`、`core/install/bootstrap.ts`、`core/account.ts:66`）；扩展 `native-install.test.ts`
-- [ ] 3.6 更新 `AGENTS.md` 代码地图（`provider-facts.ts`、`provider-registry.ts`、`model-identity.ts`）与 `ARCHITECTURE.md` 的 provider 结构；`npm run check` 通过
+- [x] 3.6 更新 `AGENTS.md` 代码地图（`provider-facts.ts`、`provider-registry.ts`、`model-identity.ts`）与 `ARCHITECTURE.md` 的 provider 结构；`npm run check` 通过
 
 ## 4. P3 Direct 执行契约（MP-0301–0304、DD §8）
 
 - [x] 4.1 MP-0301：`gw/provider-request.ts` 新增 `UpstreamOpen` 与 `PreparedRequest.open(signal, fetch)`，以及 `httpUpstream` 包装；新增单测覆盖成功、非 2xx 返回 `{ok:false}`、网络错误
 - [x] 4.2 MP-0302：`handleHosted` 重命名为 `handleDirect`，只经 `open` 打开上游；只有 server 发送终止事件（`emitTerminal`），adapter 输出不含 `message_delta`/`message_stop`；单测断言整条流 `message_stop` 只出现一次
 - [x] 4.3 MP-0303：Zen 与 OpenAI 改为实现 `DirectProviderAdapter{prepare, signaturePrefixes}`；`native-zen-*`、`native-openai-*` 测试断言不变
-- [ ] 4.4 MP-0304：准备失败返回 BadRequest 且无上游请求；客户端断开时 signal 传到上游且只发一次请求；`gw/server.ts` 不 import `plugins/multi-*`（加一条 import 断言测试）
+- [x] 4.4 MP-0304：准备失败返回 BadRequest 且无上游请求；客户端断开时 signal 传到上游且只发一次请求；`gw/server.ts` 不 import `plugins/multi-*`（加一条 import 断言测试）
 - [ ] 4.5 更新 `ARCHITECTURE.md` 的 Direct 执行说明；`npm run check` 通过
 
 ## 5. P4 Launcher、worker 与 usage 表驱动（MP-0401–0405、DD §7.4、§11）
 
-- [ ] 5.1 MP-0401：`registerBuiltinProviders()` 静态注册内置描述符；launcher 发现流程遍历 `registry.list()` 并过滤已启用插件；`native-launcher.test.ts` 通过
+- [x] 5.1 MP-0401：`registerBuiltinProviders()` 静态注册内置描述符；launcher 发现流程遍历 `registry.list()` 并过滤已启用插件；`native-launcher.test.ts` 通过
 - [ ] 5.2 MP-0402：`GatewayOptions` 改为接收 `runtime`，删除 `zen`、`cursor`、`antigravity`、`grok`、`reviewers`、`displayTools`、`usageReaders`；`ProviderRuntime.close()` 沿用 `Closable`；`native-gateway*` 测试通过
 - [ ] 5.3 MP-0403：`WORKER_RUNS`、`direct`、`pickerSettings`、`gatewayEnvironment` 改为由 Registry 派生；每个 route provider 一个 worker；Agent 定义 ≤8000 的 `--agents` 预算测试通过
-- [ ] 5.4 MP-0404：`gw/provider-usage.ts` 的 `UsageProvider`、`providers`、`unavailable` 改为表驱动；`native-provider-usage.test.ts` 断言不变
+- [x] 5.4 MP-0404：`gw/provider-usage.ts` 的 `UsageProvider`、`providers`、`unavailable` 改为表驱动；`native-provider-usage.test.ts` 断言不变
 - [x] 5.5 MP-0405：`.claude-plugin/marketplace.json` 与 `scripts/versioning.ts` 支持新增插件条目；`npm run check:versions` 通过
 - [ ] 5.6 第 1 组快照除明确允许的差异外不变；usage 相关既有测试断言未修改；`npm run check` 与 `npm run test:mod` 通过
 
