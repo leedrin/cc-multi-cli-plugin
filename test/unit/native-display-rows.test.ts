@@ -16,9 +16,9 @@ import type {
   MessagesRequest,
   MessagesResponse,
 } from '../../plugins/multi-core/src/gateway/messages.ts';
-import { createNativeGateway } from '../../plugins/multi-core/src/gateway/server.ts';
 import { cursorPermissionPolicy } from '../../plugins/multi-cursor/src/permissions.ts';
 import { grokPermissionPolicy } from '../../plugins/multi-grok/src/permissions.ts';
+import { createNativeGateway } from './support/runtime.ts';
 
 const row = {
   type: 'tool_use' as const,

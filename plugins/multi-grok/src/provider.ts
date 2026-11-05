@@ -5,6 +5,7 @@ import type {
 } from '../../multi-core/src/gateway/provider-registry.ts';
 import { GrokHarness } from './harness.ts';
 import { discoverGrokModels } from './models.ts';
+import { GROK_TOOLS } from './permissions.ts';
 
 function modelIdentity(route: string) {
   const identity = decodeModelRoute(route);
@@ -51,6 +52,7 @@ export const grokProvider: ProviderDescriptor = {
   autoReview: { review: 'none', statement: 'no auto mode: actions run unreviewed' },
   unavailableMessage: 'Grok is unavailable. Install Grok Build, run grok login, and relaunch.',
   worker: { type: 'multi-grok' },
+  displayTools: GROK_TOOLS,
   availability: async (context) => {
     try {
       const models = await discoverGrok(context, { throwOnError: true });

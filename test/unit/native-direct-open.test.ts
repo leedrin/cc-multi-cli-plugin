@@ -5,8 +5,8 @@ import path from 'node:path';
 import test, { type TestContext } from 'node:test';
 import type { GatewayFetch } from '../../plugins/multi-core/src/gateway/fetch.ts';
 import type { MessagesResponse } from '../../plugins/multi-core/src/gateway/messages.ts';
-import { createNativeGateway } from '../../plugins/multi-core/src/gateway/server.ts';
 import { removeTemporary } from '../temporary.ts';
+import { createNativeGateway } from './support/runtime.ts';
 
 const providers = [
   {

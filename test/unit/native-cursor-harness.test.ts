@@ -18,7 +18,6 @@ import type {
   MessagesResponse,
 } from '../../plugins/multi-core/src/gateway/messages.ts';
 import type { PermissionContext } from '../../plugins/multi-core/src/gateway/mode-hook.ts';
-import { createNativeGateway } from '../../plugins/multi-core/src/gateway/server.ts';
 import { lockStateFile } from '../../plugins/multi-core/src/gateway/state-lock.ts';
 import { CursorProviderError } from '../../plugins/multi-cursor/src/errors.ts';
 import {
@@ -27,6 +26,7 @@ import {
 } from '../../plugins/multi-cursor/src/harness.ts';
 import { cursorModelOptions } from '../../plugins/multi-cursor/src/models.ts';
 import { removeTemporary } from '../temporary.ts';
+import { createNativeGateway } from './support/runtime.ts';
 
 const models = cursorModelOptions([
   { id: 'test-model', displayName: 'Test Model' },

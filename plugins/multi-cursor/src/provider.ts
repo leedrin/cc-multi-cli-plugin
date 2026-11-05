@@ -6,6 +6,7 @@ import type {
 } from '../../multi-core/src/gateway/provider-registry.ts';
 import { CursorHarness } from './harness.ts';
 import { cursorModelOptions } from './models.ts';
+import { CURSOR_TOOLS } from './progress.ts';
 
 function modelIdentity(route: string) {
   const identity = decodeModelRoute(route);
@@ -73,6 +74,7 @@ export const cursorProvider: ProviderDescriptor = {
   },
   unavailableMessage: 'Cursor SDK is not signed in. Run the launcher with --cursor-login first.',
   worker: { type: 'multi-cursor' },
+  displayTools: CURSOR_TOOLS,
   availability: async (context) => {
     try {
       const { cursorSignedIn } = await discoverCursor(context, false);

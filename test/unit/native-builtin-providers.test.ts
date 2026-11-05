@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
+import { ANTIGRAVITY_TOOLS } from '../../plugins/multi-antigravity/src/progress.ts';
 import {
   BUILTIN_PROVIDERS,
   createBuiltinRegistry,
@@ -14,6 +15,8 @@ import {
   PROVIDER_AUTO_REVIEW,
 } from '../../plugins/multi-core/src/gateway/provider.ts';
 import { PROVIDER_FACTS } from '../../plugins/multi-core/src/gateway/provider-facts.ts';
+import { CURSOR_TOOLS } from '../../plugins/multi-cursor/src/progress.ts';
+import { GROK_TOOLS } from '../../plugins/multi-grok/src/permissions.ts';
 import { removeTemporary } from '../temporary.ts';
 
 const BUILTIN_IDS = ['openai', 'zen', 'cursor', 'antigravity', 'grok'];
@@ -33,6 +36,19 @@ const LEGACY_HARNESS_UNAVAILABLE = {
   antigravity: 'Antigravity is unavailable. Install and connect the multi-antigravity plugin.',
   grok: 'Grok is unavailable. Install Grok Build, run grok login, and relaunch.',
 } as const;
+
+test('harness descriptors expose their native display tools', () => {
+  const expected = {
+    cursor: CURSOR_TOOLS,
+    antigravity: ANTIGRAVITY_TOOLS,
+    grok: GROK_TOOLS,
+  } as const;
+  for (const [id, tools] of Object.entries(expected)) {
+    const descriptor = BUILTIN_PROVIDERS.find((provider) => provider.id === id);
+    assert(descriptor);
+    assert.deepEqual(descriptor.displayTools, tools);
+  }
+});
 
 test('built-in registry registers five provider descriptors with matching facts', () => {
   const registry = createBuiltinRegistry();

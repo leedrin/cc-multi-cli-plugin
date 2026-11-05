@@ -4,7 +4,7 @@ import { AntigravityProviderError } from '../../plugins/multi-antigravity/src/ha
 import { HarnessBusyError } from '../../plugins/multi-core/src/gateway/harness-session.ts';
 import type { MessagesResponse } from '../../plugins/multi-core/src/gateway/messages.ts';
 import { PermissionModes } from '../../plugins/multi-core/src/gateway/mode-hook.ts';
-import { createNativeGateway } from '../../plugins/multi-core/src/gateway/server.ts';
+import { createNativeGateway } from './support/runtime.ts';
 
 const reply: MessagesResponse = {
   id: 'agy-test',

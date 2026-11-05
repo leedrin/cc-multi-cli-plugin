@@ -6,14 +6,13 @@ import test from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 import type { AgentOptions, Run, RunResult, SDKUserMessage, SendOptions } from '@cursor/sdk';
 import { PermissionModes } from '../../plugins/multi-core/src/gateway/mode-hook.ts';
-import { createNativeGateway } from '../../plugins/multi-core/src/gateway/server.ts';
 import {
   type CreateCursorHarnessAgent,
   CursorHarness,
 } from '../../plugins/multi-cursor/src/harness.ts';
 import { cursorModelOptions } from '../../plugins/multi-cursor/src/models.ts';
-import { CURSOR_TOOLS } from '../../plugins/multi-cursor/src/progress.ts';
 import { removeTemporary } from '../temporary.ts';
+import { createNativeGateway } from './support/runtime.ts';
 
 const options = cursorModelOptions([{ id: 'test-model', displayName: 'Test Model' }]);
 
@@ -84,7 +83,6 @@ test('Cursor harness serves isolated main and worker SSE progress without replay
     token: 'test-token',
     authFile: 'unused',
     cursor: harness,
-    displayTools: { cursor: CURSOR_TOOLS },
     timeoutMs: 5,
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));

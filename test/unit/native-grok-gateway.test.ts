@@ -3,9 +3,9 @@ import test from 'node:test';
 import { isHarnessModel } from '../../plugins/multi-core/hooks/provider.ts';
 import type { MessagesResponse } from '../../plugins/multi-core/src/gateway/messages.ts';
 import { PermissionModes } from '../../plugins/multi-core/src/gateway/mode-hook.ts';
-import { createNativeGateway } from '../../plugins/multi-core/src/gateway/server.ts';
 import { workerCatalog, workerDefinitions } from '../../plugins/multi-core/src/launcher.ts';
 import type { GrokModel } from '../../plugins/multi-grok/src/models.ts';
+import { createNativeGateway } from './support/runtime.ts';
 
 const model: GrokModel = {
   id: 'grok-4.6',

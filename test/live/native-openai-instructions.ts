@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createNativeGateway } from '../../plugins/multi-core/src/gateway/server.ts';
+import { createNativeGateway } from '../unit/support/runtime.ts';
 
 const root = await mkdtemp(path.join(os.tmpdir(), 'openai-instructions-live-'));
 const results: unknown[] = [];

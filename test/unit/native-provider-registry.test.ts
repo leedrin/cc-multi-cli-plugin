@@ -143,6 +143,7 @@ test('provider runtime resolves active models by their full identity and rejects
   assert.equal(runtime.resolveModel('multi/cursor/composer-2/nonexistent-preset'), undefined);
   assert.equal(runtime.resolveModel('multi/cursor/composer-2/'), undefined);
   await runtime.close();
+  await runtime.close();
   assert.equal(closed, 1);
 });
 

@@ -7,7 +7,6 @@ import {
   nestedClaudeShim,
   withPathPrefix,
 } from '../../plugins/multi-core/src/gateway/nested-env.ts';
-import { createNativeGateway } from '../../plugins/multi-core/src/gateway/server.ts';
 import {
   describeRunError,
   needsEnvProxy,
@@ -15,6 +14,7 @@ import {
   withLoopbackNoProxy,
   withoutGateway,
 } from '../../plugins/multi-core/src/install/process.ts';
+import { createNativeGateway } from './support/runtime.ts';
 
 test('a nested Claude run gets the session start environment back, not the gateway', () => {
   const original = {

@@ -9,12 +9,9 @@ import path from 'node:path';
 import type { GatewayFetch } from '../../plugins/multi-core/src/gateway/fetch.ts';
 import type { MessagesResponse } from '../../plugins/multi-core/src/gateway/messages.ts';
 import { readSse } from '../../plugins/multi-core/src/gateway/responses.ts';
-import {
-  createNativeGateway,
-  type GatewayOptions,
-} from '../../plugins/multi-core/src/gateway/server.ts';
 import { readZenKey } from '../../plugins/multi-zen/src/auth.ts';
 import { zenModel, zenPickerOptions } from '../../plugins/multi-zen/src/models.ts';
+import { createNativeGateway, type GatewayOptions } from '../unit/support/runtime.ts';
 import { isolatedEnvironment } from './environment.ts';
 
 interface UsageSample {

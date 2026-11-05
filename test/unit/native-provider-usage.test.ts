@@ -1,16 +1,27 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createBuiltinRegistry } from '../../plugins/multi-core/src/gateway/builtin-providers.ts';
+import type { NativeHarness } from '../../plugins/multi-core/src/gateway/native-harness.ts';
+import {
+  type ProviderRegistry,
+  ProviderRuntime,
+} from '../../plugins/multi-core/src/gateway/provider-registry.ts';
+import type { ProviderUsageReader } from '../../plugins/multi-core/src/gateway/provider-usage.ts';
 import {
   ProviderUsageDashboard,
   type ProviderUsageView,
 } from '../../plugins/multi-core/src/gateway/provider-usage.ts';
 import { ReceiptLedger } from '../../plugins/multi-core/src/gateway/receipts.ts';
-import {
-  createNativeGateway,
-  type GatewayEvent,
-} from '../../plugins/multi-core/src/gateway/server.ts';
+import { createNativeGateway as createNativeGatewayProduction } from '../../plugins/multi-core/src/gateway/server.ts';
+import { createNativeGateway, type GatewayEvent } from './support/runtime.ts';
 
 const empty = () => new ReceiptLedger().snapshot();
+
+function descriptorFor(registry: ProviderRegistry, id: string) {
+  const descriptor = registry.get(id);
+  assert(descriptor);
+  return descriptor;
+}
 test('provider dashboard reads every enabled provider and preserves unavailable quota status', async () => {
   const calls: string[] = [];
   const reader = (provider: string) => async (session: string) => {
@@ -125,6 +136,121 @@ test('provider menu route is authenticated, session scoped and read-only', async
   const body = (await response.json()) as ProviderUsageView;
   assert.equal(body.providers[1].summary, 'owned');
   assert.equal(reads, 1);
+});
+
+test('production gateway derives dashboard readers and enabled providers from runtime', async (t) => {
+  const registry = createBuiltinRegistry();
+  const ids = ['openai', 'cursor', 'zen', 'antigravity', 'grok'] as const;
+  const calls: string[] = [];
+  const readers = Object.fromEntries(
+    ids.map((id) => [
+      id,
+      async (session: string) => {
+        calls.push(`${id}:${session}`);
+        return { summary: `${id} quota`, details: [`${id} account`] };
+      },
+    ]),
+  ) as Record<(typeof ids)[number], ProviderUsageReader>;
+  const harness = {
+    validate: () => 0,
+    handle: async () => {
+      throw new Error('Usage test must not run harnesses');
+    },
+  } satisfies NativeHarness;
+  const runtime = new ProviderRuntime(
+    ids.map((id) => ({
+      descriptor: descriptorFor(registry, id),
+      models: [],
+      usage: readers[id],
+      ...(id === 'cursor' || id === 'antigravity' || id === 'grok' ? { harness } : {}),
+    })),
+    { registry },
+  );
+  const server = createNativeGatewayProduction({ token: 'runtime-usage-token', runtime });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => {
+    server.closeAllConnections();
+    return new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+  const address = server.address();
+  assert(address && typeof address !== 'string');
+  const url = `http://127.0.0.1:${address.port}/multi/mod/usage?sessionId=usage-owned&view=providers`;
+  const response = await fetch(url, {
+    headers: { 'x-multi-gateway-token': 'runtime-usage-token' },
+  });
+  assert.equal(response.status, 200);
+  const view = (await response.json()) as ProviderUsageView;
+  assert.deepEqual(calls.sort(), ids.map((id) => `${id}:usage-owned`).sort());
+  for (const id of ids) {
+    const row = view.providers.find((candidate) => candidate.id === id);
+    assert.equal(row?.summary, `${id} quota`);
+    assert(row?.details.includes(`${id} account`));
+  }
+});
+
+test('production dashboard enablement follows active runtime and enabledProviders', async () => {
+  const registry = createBuiltinRegistry();
+  const ids = ['openai', 'cursor', 'zen', 'antigravity', 'grok'] as const;
+  const makeRuntime = (withHarness: boolean) =>
+    new ProviderRuntime(
+      ids.map((id) => ({
+        descriptor: descriptorFor(registry, id),
+        models: [],
+        usage: async () => ({ summary: `${id} quota`, details: [] }),
+        ...(withHarness && (id === 'cursor' || id === 'antigravity' || id === 'grok')
+          ? {
+              harness: {
+                validate: () => 0,
+                handle: async () => {
+                  throw new Error('Usage test must not run harnesses');
+                },
+              } satisfies NativeHarness,
+            }
+          : {}),
+      })),
+      { registry },
+    );
+  const read = async (runtime: ProviderRuntime, enabledProviders?: readonly string[]) => {
+    const server = createNativeGatewayProduction({
+      token: 'runtime-usage-token',
+      runtime,
+      enabledProviders,
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const address = server.address();
+      assert(address && typeof address !== 'string');
+      const response = await fetch(
+        `http://127.0.0.1:${address.port}/multi/mod/usage?sessionId=enabled-check&view=providers`,
+        { headers: { 'x-multi-gateway-token': 'runtime-usage-token' } },
+      );
+      return (await response.json()) as ProviderUsageView;
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  };
+  const noHarness = await read(makeRuntime(false));
+  const row = (view: ProviderUsageView, id: (typeof ids)[number]) =>
+    view.providers.find((candidate) => candidate.id === id);
+  assert.notEqual(row(noHarness, 'openai')?.status, 'disabled');
+  assert.equal(row(noHarness, 'cursor')?.status, 'disabled');
+  assert.notEqual(row(noHarness, 'zen')?.status, 'disabled');
+  assert.equal(row(noHarness, 'antigravity')?.status, 'disabled');
+  assert.equal(row(noHarness, 'grok')?.status, 'disabled');
+
+  const withHarness = await read(makeRuntime(true));
+  for (const id of ids) {
+    assert.notEqual(row(withHarness, id)?.status, 'disabled');
+  }
+  const filtered = await read(makeRuntime(true), ['cursor']);
+  assert.equal(row(filtered, 'cursor')?.status, 'ready');
+  for (const id of ['openai', 'zen', 'antigravity', 'grok'] as const) {
+    assert.equal(row(filtered, id)?.status, 'disabled');
+  }
+  const noActive = await read(new ProviderRuntime([], { registry }));
+  assert.notEqual(row(noActive, 'openai')?.status, 'disabled');
+  assert.equal(row(noActive, 'zen')?.status, 'disabled');
 });
 
 const at = (

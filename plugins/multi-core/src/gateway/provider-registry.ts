@@ -3,6 +3,8 @@ import type { NativeHarness } from './native-harness.ts';
 import type { AutoReviewPolicy } from './provider.ts';
 import { PROVIDER_FACTS } from './provider-facts.ts';
 import type { PreparedRequest, ProviderRequestInput } from './provider-request.ts';
+import type { ProviderUsageReader as ProviderUsageCallback } from './provider-usage.ts';
+import type { Reviewer } from './verdicts.ts';
 
 type ProviderKind = 'direct' | 'harness';
 
@@ -89,6 +91,8 @@ export interface ActiveProvider {
   descriptor: ProviderDescriptor;
   models: readonly ModelDescriptor[];
   harness?: NativeHarness;
+  reviewer?: Reviewer;
+  usage?: ProviderUsageCallback;
 }
 
 export interface ResolvedProviderModel {
@@ -203,13 +207,21 @@ export class ProviderRegistry {
 export class ProviderRuntime {
   private closed = false;
   private readonly providers: readonly ActiveProvider[];
+  readonly registry?: ProviderRegistry;
 
-  constructor(providers: readonly ActiveProvider[]) {
+  constructor(providers: readonly ActiveProvider[], options: { registry?: ProviderRegistry } = {}) {
     this.providers = providers;
+    if (options.registry) {
+      this.registry = options.registry;
+    }
   }
 
   active(): readonly ActiveProvider[] {
     return this.providers;
+  }
+
+  provider(id: string): ActiveProvider | undefined {
+    return this.providers.find(({ descriptor }) => descriptor.id === id);
   }
 
   resolveModel(routeId: string): ResolvedProviderModel | undefined {
@@ -227,12 +239,10 @@ export class ProviderRuntime {
       return;
     }
     this.closed = true;
-    await Promise.all(
-      this.providers.map(async ({ harness }) => {
-        if (harness && 'close' in harness && typeof harness.close === 'function') {
-          await harness.close();
-        }
-      }),
-    );
+    for (const { harness } of this.providers) {
+      if (harness && 'close' in harness && typeof harness.close === 'function') {
+        await harness.close();
+      }
+    }
   }
 }

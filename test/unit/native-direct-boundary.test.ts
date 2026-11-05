@@ -7,10 +7,12 @@ import test, { type TestContext } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createBuiltinRegistry } from '../../plugins/multi-core/src/gateway/builtin-providers.ts';
 import type { ProviderRegistry } from '../../plugins/multi-core/src/gateway/provider-registry.ts';
+import { ProviderRuntime } from '../../plugins/multi-core/src/gateway/provider-registry.ts';
 import type { ProviderRequestInput } from '../../plugins/multi-core/src/gateway/provider-request.ts';
-import { createNativeGateway } from '../../plugins/multi-core/src/gateway/server.ts';
+import { createNativeGateway as createNativeGatewayProduction } from '../../plugins/multi-core/src/gateway/server.ts';
 import { ZenAuthError } from '../../plugins/multi-zen/src/auth.ts';
 import { zenUnavailable } from '../../plugins/multi-zen/src/gateway-request.ts';
+import { createNativeGateway as createGatewayHelper } from './support/runtime.ts';
 
 const headers = {
   'content-type': 'application/json',
@@ -28,7 +30,7 @@ async function startGateway(
   zen?: { apiKey: string },
   options: { authFile?: string | null; registry?: ProviderRegistry } = {},
 ) {
-  const server = createNativeGateway({
+  const server = createGatewayHelper({
     token: 'fixture-token',
     ...(options.authFile === null
       ? {}
@@ -80,22 +82,15 @@ test('unbound Zen prepare fails with the exact unavailable message', () => {
   );
 });
 
-test('a custom registry cannot be combined with gateway credentials', () => {
+test('runtime registry owns direct-provider credentials', () => {
   const registry = createBuiltinRegistry({ zenKey: 'fixture-zen-key' });
+  const runtime = new ProviderRuntime([], { registry });
+  assert.equal(runtime.registry, registry);
+  assert(runtime.registry);
+  assert.equal(runtime.registry.get('zen')?.direct?.prepare, registry.get('zen')?.direct?.prepare);
   assert.throws(
-    () =>
-      createNativeGateway({ token: 'fixture-token', authFile: '/explicit/auth.json', registry }),
-    /credentials.*registry/i,
-  );
-  assert.throws(
-    () =>
-      createNativeGateway({
-        token: 'fixture-token',
-        authFile: undefined as unknown as string,
-        zen: { apiKey: 'fixture-zen-key' },
-        registry,
-      }),
-    /credentials.*registry/i,
+    () => createBuiltinRegistry({ zenKey: 'bad key' }),
+    (error: unknown) => error instanceof ZenAuthError,
   );
 });
 
@@ -121,6 +116,39 @@ test('a pre-bound registry remains intact and works without gateway credentials'
   });
   assert.equal(response.status, 429);
   assert.equal(calls, 1);
+});
+
+test('production gateway preserves an explicit custom registry and its credentials', async (t) => {
+  const registry = createBuiltinRegistry({ zenKey: 'fixture-zen-key' });
+  const runtime = new ProviderRuntime([], { registry });
+  assert.equal(runtime.registry, registry);
+  let calls = 0;
+  const server = createNativeGatewayProduction({
+    token: 'fixture-token',
+    runtime,
+    fetchImpl: async () => {
+      calls++;
+      return new Response('upstream fixture', { status: 429 });
+    },
+  });
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  assert(address && typeof address === 'object');
+  const response = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body('multi/zen/gpt-5.6-luna')),
+  });
+  assert.equal(response.status, 429);
+  assert.equal(calls, 1);
+  assert.equal(runtime.registry, registry);
 });
 
 test('the default registry uses its explicit OpenAI auth file', async (t) => {
@@ -155,7 +183,7 @@ test('the default registry uses its explicit OpenAI auth file', async (t) => {
 test('an invalid Zen key fails gateway creation with ZenAuthError', () => {
   assert.throws(
     () =>
-      createNativeGateway({
+      createGatewayHelper({
         token: 'fixture-token',
         authFile: '/nonexistent/codex-auth.json',
         zen: { apiKey: 'bad key' },
@@ -186,6 +214,75 @@ test('Zen without a key and invalid direct requests fail before an upstream call
   });
   assert.equal(invalid.status, 400);
   assert.equal(calls, 0);
+});
+
+test('production gateway defaults match when runtime is omitted or explicitly empty', async (t) => {
+  const cases = [
+    { name: 'omitted runtime', runtime: undefined },
+    { name: 'empty runtime', runtime: new ProviderRuntime([]) },
+  ];
+  for (const { name, runtime } of cases) {
+    await t.test(name, async (subtest) => {
+      let anthropicBody: Record<string, unknown> | undefined;
+      const server = createNativeGatewayProduction({
+        token: 'fixture-token',
+        runtime,
+        fetchImpl: async (input, init) => {
+          if (String(input).includes('api.anthropic.com')) {
+            anthropicBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          }
+          return new Response('{}', { status: 200 });
+        },
+      });
+      subtest.after(async () => {
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      });
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(0, '127.0.0.1', resolve);
+      });
+      const address = server.address();
+      assert(address && typeof address === 'object');
+      const url = `http://127.0.0.1:${address.port}/v1/messages`;
+      const zen = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body('multi/zen/gpt-5.6-luna')),
+      });
+      const zenFailure = (await zen.json()) as { error: { message: string } };
+      assert.equal(zen.status, 400);
+      assert.equal(zenFailure.error.message, `Native gateway: ${zenUnavailable}`);
+
+      const openai = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body('multi/openai/gpt-6-luna')),
+      });
+      const openaiFailure = (await openai.json()) as { error: { message: string } };
+      assert.notEqual(openai.status, 400);
+      assert(!openaiFailure.error.message.includes('Direct provider openai is not registered'));
+
+      const anthropic = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          ...body('claude-test'),
+          messages: [
+            {
+              role: 'assistant',
+              content: [
+                { type: 'thinking', thinking: 'foreign', signature: 'multi-openai:foreign' },
+              ],
+            },
+          ],
+        }),
+      });
+      assert.equal(anthropic.status, 200);
+      const messages = anthropicBody?.messages as { content: { signature?: string }[] }[];
+      assert.equal(messages[0]?.content[0]?.signature, undefined);
+    });
+  }
 });
 
 test('a disconnected client aborts the single direct upstream request', async (t) => {

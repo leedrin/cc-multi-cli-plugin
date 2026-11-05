@@ -7,7 +7,7 @@ import type { TestContext } from 'node:test';
 import test from 'node:test';
 import type { GatewayFetch } from '../../plugins/multi-core/src/gateway/fetch.ts';
 import type { GatewayEvent } from '../../plugins/multi-core/src/gateway/server.ts';
-import { createNativeGateway } from '../../plugins/multi-core/src/gateway/server.ts';
+import { createNativeGateway } from './support/runtime.ts';
 
 const TOKEN = 'local-test-secret';
 

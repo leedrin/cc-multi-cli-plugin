@@ -13,12 +13,12 @@ import type {
   ServedReply,
 } from '../../plugins/multi-core/src/gateway/messages.ts';
 import type { NativeHarness } from '../../plugins/multi-core/src/gateway/native-harness.ts';
+import { createOpenAIReviewer } from '../../plugins/multi-openai/src/approval.ts';
 import {
   createNativeGateway,
   type GatewayEvent,
   type GatewayOptions,
-} from '../../plugins/multi-core/src/gateway/server.ts';
-import { createOpenAIReviewer } from '../../plugins/multi-openai/src/approval.ts';
+} from '../unit/support/runtime.ts';
 
 const model = 'multi/openai/gpt-6-luna';
 const safeguards = [

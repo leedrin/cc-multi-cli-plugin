@@ -9,7 +9,7 @@ import type { MessagesResponse } from '../../plugins/multi-core/src/gateway/mess
 import { ProviderUsageDashboard } from '../../plugins/multi-core/src/gateway/provider-usage.ts';
 import { ReceiptLedger } from '../../plugins/multi-core/src/gateway/receipts.ts';
 import { type ResponsesRequest, readSse } from '../../plugins/multi-core/src/gateway/responses.ts';
-import { createNativeGateway } from '../../plugins/multi-core/src/gateway/server.ts';
+import { createNativeGateway } from '../unit/support/runtime.ts';
 import { isolatedEnvironment } from './environment.ts';
 
 interface Sample {

@@ -5,6 +5,7 @@ import type {
 } from '../../multi-core/src/gateway/provider-registry.ts';
 import { AntigravityHarness } from './harness.ts';
 import { discoverAntigravityModels } from './models.ts';
+import { ANTIGRAVITY_TOOLS } from './progress.ts';
 
 function modelIdentity(route: string) {
   const identity = decodeModelRoute(route);
@@ -53,6 +54,7 @@ export const antigravityProvider: ProviderDescriptor = {
   unavailableMessage:
     'Antigravity is unavailable. Install and connect the multi-antigravity plugin.',
   worker: { type: 'multi-antigravity' },
+  displayTools: ANTIGRAVITY_TOOLS,
   availability: async (context) => {
     try {
       const models = await discoverAntigravity(context, { throwOnError: true });

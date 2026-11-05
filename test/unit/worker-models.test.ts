@@ -6,10 +6,6 @@ import test from 'node:test';
 import { PermissionModes } from '../../plugins/multi-core/src/gateway/mode-hook.ts';
 import { fromResponses } from '../../plugins/multi-core/src/gateway/responses.ts';
 import {
-  createNativeGateway,
-  type GatewayOptions,
-} from '../../plugins/multi-core/src/gateway/server.ts';
-import {
   stripWorkerJson,
   stripWorkerModel,
   stripWorkerSse,
@@ -17,6 +13,7 @@ import {
 } from '../../plugins/multi-core/src/gateway/worker-models.ts';
 import { workerCatalog } from '../../plugins/multi-core/src/launcher.ts';
 import { fromChat } from '../../plugins/multi-zen/src/chat.ts';
+import { createNativeGateway, type GatewayOptions } from './support/runtime.ts';
 
 const frame = (type: string, value: object, eol = '\n') =>
   `event: ${type}${eol}data: ${JSON.stringify({ type, ...value })}${eol}${eol}`;

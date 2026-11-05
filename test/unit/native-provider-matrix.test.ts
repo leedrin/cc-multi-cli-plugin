@@ -10,9 +10,9 @@ import { PermissionModes } from '../../plugins/multi-core/src/gateway/mode-hook.
 import { ProviderUsageDashboard } from '../../plugins/multi-core/src/gateway/provider-usage.ts';
 import { ReceiptLedger } from '../../plugins/multi-core/src/gateway/receipts.ts';
 import type { GatewayEvent } from '../../plugins/multi-core/src/gateway/server.ts';
-import { createNativeGateway } from '../../plugins/multi-core/src/gateway/server.ts';
 import { buildWorkerCatalog } from '../../plugins/multi-core/src/gateway/worker-catalog.ts';
 import { removeTemporary } from '../temporary.ts';
+import { createNativeGateway } from './support/runtime.ts';
 
 // Characterization of the five-provider matrix as it stands before the usage patchset. It
 // pins routing, worker types and completion-event usage so a usage change that alters provider

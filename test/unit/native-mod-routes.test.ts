@@ -3,8 +3,8 @@ import test from 'node:test';
 import { setImmediate } from 'node:timers/promises';
 import { ModBridge } from '../../plugins/multi-core/src/gateway/mod-bridge.ts';
 import { PermissionModes } from '../../plugins/multi-core/src/gateway/mode-hook.ts';
-import { createNativeGateway } from '../../plugins/multi-core/src/gateway/server.ts';
 import { workerCatalog } from '../../plugins/multi-core/src/launcher.ts';
+import { createNativeGateway } from './support/runtime.ts';
 
 async function start(
   t: test.TestContext,

@@ -19,7 +19,6 @@ import {
   discoverAntigravityModels,
 } from '../../multi-antigravity/src/models.ts';
 import { antigravityPermissionPolicy } from '../../multi-antigravity/src/permissions.ts';
-import { ANTIGRAVITY_TOOLS } from '../../multi-antigravity/src/progress.ts';
 import { discoverAntigravity } from '../../multi-antigravity/src/provider.ts';
 import { antigravityUsageReader } from '../../multi-antigravity/src/usage-adapter.ts';
 import type { Effort } from '../../multi-core/src/gateway/responses.ts';
@@ -27,7 +26,6 @@ import { CursorHarness } from '../../multi-cursor/src/harness.ts';
 import type { CursorModelOption } from '../../multi-cursor/src/models.ts';
 import { CURSOR_DEFAULT_WORKER_MODEL, cursorPickerOptions } from '../../multi-cursor/src/models.ts';
 import { cursorPermissionPolicy } from '../../multi-cursor/src/permissions.ts';
-import { CURSOR_TOOLS } from '../../multi-cursor/src/progress.ts';
 import { discoverCursor } from '../../multi-cursor/src/provider.ts';
 import { cursorUsageReader } from '../../multi-cursor/src/usage-adapter.ts';
 import { CursorWorkspaces } from '../../multi-cursor/src/workspaces.ts';
@@ -38,7 +36,7 @@ import {
   grokDefaultWorkerModel,
   grokPickerOptions,
 } from '../../multi-grok/src/models.ts';
-import { GROK_TOOLS, grokPermissionPolicy } from '../../multi-grok/src/permissions.ts';
+import { grokPermissionPolicy } from '../../multi-grok/src/permissions.ts';
 import { discoverGrok } from '../../multi-grok/src/provider.ts';
 import { grokUsageReader } from '../../multi-grok/src/usage-adapter.ts';
 import { createOpenAIReviewer } from '../../multi-openai/src/approval.ts';
@@ -63,7 +61,7 @@ import {
   type PluginPermissionInventory,
   pluginPermissions,
 } from './gateway/agent-definitions.ts';
-import { registerBuiltinProviders } from './gateway/builtin-providers.ts';
+import { createBuiltinRegistry, registerBuiltinProviders } from './gateway/builtin-providers.ts';
 import { DISPLAY_TOOL_SERVER } from './gateway/display-rows.ts';
 import { executableInvocation, resolveExecutable } from './gateway/executable.ts';
 import {
@@ -76,7 +74,12 @@ import { PermissionModes } from './gateway/mode-hook.ts';
 import { decodeModelRoute } from './gateway/model-identity.ts';
 import { nestedClaudeShim, withPathPrefix } from './gateway/nested-env.ts';
 import { nativeSpelling } from './gateway/provider.ts';
-import { type ProviderDiscoveryContext, ProviderRegistry } from './gateway/provider-registry.ts';
+import {
+  type ActiveProvider,
+  type ProviderDiscoveryContext,
+  ProviderRegistry,
+  ProviderRuntime,
+} from './gateway/provider-registry.ts';
 import type { ProviderUsageReader } from './gateway/provider-usage.ts';
 import { ReceiptLedger } from './gateway/receipts.ts';
 import type { GatewayEvent } from './gateway/server.ts';
@@ -257,6 +260,13 @@ async function main() {
   const reviewers = {
     openai: openaiReview ? await createOpenAIReviewer(authFile, process.cwd()) : undefined,
   };
+  const runtime = launcherRuntime(
+    authFile,
+    zenKey,
+    usageReaders,
+    { cursor, antigravity, grok },
+    reviewers.openai,
+  );
   const receipts = new ReceiptLedger({
     file: process.env.MULTI_RECEIPTS_FILE
       ? path.resolve(process.env.MULTI_RECEIPTS_FILE)
@@ -270,16 +280,9 @@ async function main() {
     billedUsage: cursor?.billedUsageForSession.bind(cursor),
     token,
     enabledProviders,
-    authFile,
     modBridge,
-    displayTools: { cursor: CURSOR_TOOLS, antigravity: ANTIGRAVITY_TOOLS, grok: GROK_TOOLS },
-    cursor,
-    antigravity,
-    grok,
-    zen: zenKey ? { apiKey: zenKey } : undefined,
-    usageReaders,
+    runtime,
     permissionModes,
-    reviewers,
     // A launch inside another Multi session forwards to the user's own upstream, not the outer gateway.
     anthropicBaseUrl: withoutGateway(process.env).ANTHROPIC_BASE_URL || undefined,
     blockAnthropic: !anthropic,
@@ -323,7 +326,7 @@ async function main() {
     checkLauncherArgumentLimit(agents, childInvocation, claudePath, process.platform);
   } catch (error) {
     server.close();
-    await closeHarnesses({ cursor, antigravity, grok });
+    await runtime.close();
     receipts.finishAll();
     await receipts.drain();
     await rm(settingsDir, { recursive: true, force: true });
@@ -339,7 +342,7 @@ async function main() {
   const shutdown = async () => {
     server.closeAllConnections();
     server.close();
-    await closeHarnesses({ cursor, antigravity, grok });
+    await runtime.close();
     receipts.finishAll();
     await receipts.drain();
     await rm(settingsDir, { recursive: true, force: true });
@@ -409,17 +412,6 @@ function validateSessionLaunch(args: string[]) {
   }
   if (args.some((arg) => arg === '--agents' || arg.startsWith('--agents='))) {
     throw new Error('This launcher supplies --agents; use agent files for additional agents.');
-  }
-}
-
-interface Closable {
-  close(): Promise<void>;
-}
-
-/** Every native harness releases its locks and child processes before the gateway exits. */
-async function closeHarnesses(harnesses: Record<string, Closable | undefined>) {
-  for (const harness of Object.values(harnesses)) {
-    await harness?.close();
   }
 }
 
@@ -495,6 +487,40 @@ function providerUsageReaders(
     antigravity: antigravity ? antigravityUsageReader() : undefined,
     grok: grok ? grokUsageReader() : undefined,
   };
+}
+
+function launcherRuntime(
+  authFile: string,
+  zenKey: string | undefined,
+  usageReaders: ReturnType<typeof providerUsageReaders>,
+  harnesses: ReturnType<typeof nativeHarnesses>,
+  reviewer: Awaited<ReturnType<typeof createOpenAIReviewer>> | undefined,
+): ProviderRuntime {
+  const registry = createBuiltinRegistry({ authFile, zenKey });
+  const active: ActiveProvider[] = [];
+  const add = (id: string, provider: Omit<ActiveProvider, 'descriptor'>) => {
+    const descriptor = registry.get(id);
+    if (descriptor) {
+      active.push({ descriptor, ...provider });
+    }
+  };
+  if (usageReaders.openai) {
+    add('openai', { models: [], ...(reviewer ? { reviewer } : {}), usage: usageReaders.openai });
+  }
+  if (zenKey) {
+    add('zen', { models: [], ...(usageReaders.zen ? { usage: usageReaders.zen } : {}) });
+  }
+  for (const id of ['cursor', 'antigravity', 'grok'] as const) {
+    const harness = harnesses[id];
+    if (harness) {
+      add(id, {
+        models: [],
+        harness,
+        ...(usageReaders[id] ? { usage: usageReaders[id] } : {}),
+      });
+    }
+  }
+  return new ProviderRuntime(active, { registry });
 }
 
 function recordValue(value: unknown): Record<string, unknown> | undefined {

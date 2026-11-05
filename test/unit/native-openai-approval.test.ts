@@ -6,13 +6,13 @@ import type { TestContext } from 'node:test';
 import test from 'node:test';
 import { setImmediate } from 'node:timers/promises';
 import type { GatewayFetch } from '../../plugins/multi-core/src/gateway/fetch.ts';
-import { createNativeGateway } from '../../plugins/multi-core/src/gateway/server.ts';
 import {
   createOpenAIReviewer,
   discoverOpenAIReviewer,
   inspectApprovalPath,
 } from '../../plugins/multi-openai/src/approval.ts';
 import { removeTemporary } from '../temporary.ts';
+import { createNativeGateway } from './support/runtime.ts';
 
 const context = {
   tool: {

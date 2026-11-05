@@ -16,7 +16,7 @@ import type {
   ServedReply,
 } from '../../plugins/multi-core/src/gateway/messages.ts';
 import type { NativeHarness } from '../../plugins/multi-core/src/gateway/native-harness.ts';
-import { createNativeGateway } from '../../plugins/multi-core/src/gateway/server.ts';
+import { createNativeGateway } from './support/runtime.ts';
 
 const model = 'multi/cursor/test';
 const handback = { name: 'SubagentHandback', input_schema: { type: 'object' } };

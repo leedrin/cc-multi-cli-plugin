@@ -26,8 +26,6 @@ import {
   readSse,
   toResponses,
 } from '../../plugins/multi-core/src/gateway/responses.ts';
-import type { GatewayEvent, GatewayOptions } from '../../plugins/multi-core/src/gateway/server.ts';
-import { createNativeGateway } from '../../plugins/multi-core/src/gateway/server.ts';
 import { estimateInputTokens } from '../../plugins/multi-core/src/gateway/tokens.ts';
 import {
   originalToolNames,
@@ -39,6 +37,8 @@ import { openaiInstructions } from '../../plugins/multi-openai/src/instructions.
 import { MODELS, OPENAI_WORKER_EFFORT } from '../../plugins/multi-openai/src/models.ts';
 import { ZEN_SIGNATURE_PREFIXES } from '../../plugins/multi-zen/src/chat.ts';
 import { removeTemporary } from '../temporary.ts';
+import type { GatewayEvent, GatewayOptions } from './support/runtime.ts';
+import { createNativeGateway } from './support/runtime.ts';
 
 const FOREIGN_PREFIXES = [OPENAI_SIGNATURE_PREFIX, ...ZEN_SIGNATURE_PREFIXES];
 

@@ -51,14 +51,14 @@ import {
   providerRoute,
   UnknownProviderError,
 } from './provider.ts';
-import type { ProviderRegistry } from './provider-registry.ts';
+import { ProviderRuntime } from './provider-registry.ts';
 import type { PreparedRequest } from './provider-request.ts';
 import { ProviderAuthError, UpstreamFailure } from './provider-request.ts';
-import { ProviderUsageDashboard, type ProviderUsageReader } from './provider-usage.ts';
+import { ProviderUsageDashboard } from './provider-usage.ts';
 import { ReceiptLedger } from './receipts.ts';
 import { isRecord } from './record.ts';
 import { forAnthropic } from './responses.ts';
-import { type Reviewer, verdictsFor } from './verdicts.ts';
+import { verdictsFor } from './verdicts.ts';
 import {
   stripWorkerJson,
   stripWorkerModel,
@@ -119,33 +119,22 @@ export interface GatewayOptions {
   receipts?: ReceiptLedger;
   usageDashboard?: ProviderUsageDashboard;
   billedUsage?: (session: string) => Promise<unknown>;
-  usageReaders?: Partial<
-    Record<'openai' | 'cursor' | 'zen' | 'antigravity' | 'grok', ProviderUsageReader>
-  >;
   token: string;
   /** How long a non-streamed provider reply may stay silent before its headers go out. */
   jsonKeepAliveMs?: number;
   /** Where Claude's own traffic goes: Anthropic by default, or the caller's own base URL. */
   anthropicBaseUrl?: string;
   enabledProviders?: readonly string[];
-  authFile?: string;
   fetchImpl?: GatewayFetch;
   onEvent?: (event: GatewayEvent) => void;
   timeoutMs?: number;
-  cursor?: NativeHarness;
-  antigravity?: NativeHarness;
-  grok?: NativeHarness;
-  zen?: { apiKey: string };
-  /** OpenAI review for GPT-originated actions, independent of Claude authentication. */
-  reviewers?: Partial<Record<'openai', Reviewer>>;
   /** No Anthropic credentials: block Anthropic passthrough. */
   blockAnthropic?: boolean;
   permissionModes?: PermissionModes;
   modBridge?: ModBridge;
-  /** Display rows for native harness actions; the native tool names each harness is known to have. */
+  /** Display rows for native harness actions. */
   displayRows?: DisplayRows;
-  displayTools?: Partial<Record<'cursor' | 'antigravity' | 'grok', readonly string[]>>;
-  registry?: ProviderRegistry;
+  runtime?: ProviderRuntime;
 }
 
 /** Rejected before any provider call; answered as HTTP 400 rather than 502. */
@@ -186,58 +175,39 @@ export function createNativeGateway({
   anthropicBaseUrl = DEFAULT_ANTHROPIC_URL,
   jsonKeepAliveMs = 30000,
   enabledProviders,
-  authFile,
   fetchImpl = fetch,
   onEvent: observer = () => {},
   timeoutMs,
-  cursor,
-  antigravity,
-  grok,
-  zen,
-  reviewers = {},
   blockAnthropic,
   permissionModes,
   modBridge = new ModBridge(),
   displayRows = new DisplayRows(),
-  displayTools = {},
   receipts = new ReceiptLedger(),
   usageDashboard,
   billedUsage,
-  usageReaders = {},
-  registry,
+  runtime,
 }: GatewayOptions): Server {
-  let providerRegistry: ProviderRegistry;
-  if (registry) {
-    if (authFile !== undefined || zen?.apiKey !== undefined) {
-      throw new Error(
-        'Native gateway: pass credentials through the registry, not alongside it (credential ownership is ambiguous).',
-      );
-    }
-    providerRegistry = registry;
-  } else {
-    providerRegistry = createBuiltinRegistry({ authFile, zenKey: zen?.apiKey });
-  }
+  const activeRuntime = runtime ?? new ProviderRuntime([]);
+  const providerRegistry = runtime?.registry ?? createBuiltinRegistry();
+  const activeProviders = activeRuntime.active();
   const dashboard =
     usageDashboard ??
     new ProviderUsageDashboard({
       enabled: (enabledProviders ?? ['openai', 'cursor', 'zen', 'antigravity', 'grok']).filter(
         (provider) => {
-          if (provider === 'cursor') {
-            return Boolean(cursor);
-          }
+          const active = activeRuntime.provider(provider);
           if (provider === 'zen') {
-            return Boolean(zen);
+            return Boolean(active);
           }
-          if (provider === 'antigravity') {
-            return Boolean(antigravity);
-          }
-          if (provider === 'grok') {
-            return Boolean(grok);
+          if (provider === 'cursor' || provider === 'antigravity' || provider === 'grok') {
+            return Boolean(active?.harness);
           }
           return provider === 'openai';
         },
       ),
-      ...usageReaders,
+      ...Object.fromEntries(
+        activeProviders.flatMap(({ descriptor, usage }) => (usage ? [[descriptor.id, usage]] : [])),
+      ),
     });
   const onEvent = (event: GatewayEvent) => {
     receipts.observe(event);
@@ -252,16 +222,16 @@ export function createNativeGateway({
   const workerModels = new WorkerModels();
   const fallbackSession = randomUUID();
   const harnesses: Record<HarnessProvider, NativeHarness | undefined> = {
-    cursor,
-    antigravity,
-    grok,
+    cursor: activeRuntime.provider('cursor')?.harness,
+    antigravity: activeRuntime.provider('antigravity')?.harness,
+    grok: activeRuntime.provider('grok')?.harness,
   };
   const harnessFor = (provider: string | undefined) =>
     isHarnessProvider(provider) ? harnesses[provider] : undefined;
   // Offer the mod rows only for the harnesses this gateway runs.
-  for (const [provider, names] of Object.entries(displayTools)) {
-    if (harnessFor(provider) && names) {
-      displayRows.announce(names);
+  for (const { descriptor, harness } of activeProviders) {
+    if (harness && descriptor.displayTools?.length) {
+      displayRows.announce(descriptor.displayTools);
     }
   }
   const rootRequests = new Map<string, MessagesRequest>();
@@ -274,7 +244,7 @@ export function createNativeGateway({
     if (provider === 'anthropic') {
       throw new Error('Cannot finalise an upstream reply');
     }
-    const reviewer = provider === 'openai' ? reviewers.openai : undefined;
+    const reviewer = provider === 'openai' ? activeRuntime.provider('openai')?.reviewer : undefined;
     const policy = autoReviewPolicy(provider, Boolean(reviewer));
     let cwd: string | undefined;
     try {
@@ -841,7 +811,10 @@ export function createNativeGateway({
         if (classification.kind !== 'provider' || classification.route === 'anthropic') {
           return undefined;
         }
-        return autoReviewPolicy(classification.route, Boolean(reviewers.openai)).statement;
+        return autoReviewPolicy(
+          classification.route,
+          Boolean(activeRuntime.provider('openai')?.reviewer),
+        ).statement;
       },
       permissionModes,
       compactions,
@@ -1371,11 +1344,7 @@ function assertProviderEnabled(model: string | null, enabled: readonly string[] 
 function externalModel(model: unknown) {
   return typeof model === 'string' && model.startsWith('multi/') ? model : null;
 }
-function validateHarness(
-  exchange: ProviderRequest,
-  provider: string,
-  bridge: NonNullable<GatewayOptions['cursor'] | GatewayOptions['antigravity']>,
-) {
+function validateHarness(exchange: ProviderRequest, provider: string, bridge: NativeHarness) {
   try {
     if (
       !['/v1/messages', '/v1/messages/count_tokens'].includes(exchange.url.pathname) ||

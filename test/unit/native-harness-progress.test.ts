@@ -14,6 +14,7 @@ import {
   observeAntigravityInit,
   observeAntigravityStep,
 } from '../../plugins/multi-antigravity/src/progress.ts';
+import { createBuiltinRegistry } from '../../plugins/multi-core/src/gateway/builtin-providers.ts';
 import { DisplayRows, ROW_TOKEN } from '../../plugins/multi-core/src/gateway/display-rows.ts';
 import {
   maximumTracked,
@@ -25,12 +26,16 @@ import { ModBridge } from '../../plugins/multi-core/src/gateway/mod-bridge.ts';
 import type { PermissionContext } from '../../plugins/multi-core/src/gateway/mode-hook.ts';
 import { PermissionModes } from '../../plugins/multi-core/src/gateway/mode-hook.ts';
 import type { NativeHarness } from '../../plugins/multi-core/src/gateway/native-harness.ts';
-import { createNativeGateway } from '../../plugins/multi-core/src/gateway/server.ts';
+import { ProviderRuntime } from '../../plugins/multi-core/src/gateway/provider-registry.ts';
+import { createNativeGateway as createNativeGatewayProduction } from '../../plugins/multi-core/src/gateway/server.ts';
+import { cursorProvider } from '../../plugins/multi-cursor/src/provider.ts';
 import type { GrokRunOptions } from '../../plugins/multi-grok/src/cli.ts';
 import { GrokHarness } from '../../plugins/multi-grok/src/harness.ts';
-import { GROK_TOOLS, grokPermissionPolicy } from '../../plugins/multi-grok/src/permissions.ts';
+import { grokPermissionPolicy } from '../../plugins/multi-grok/src/permissions.ts';
 import { observeGrokEvent } from '../../plugins/multi-grok/src/progress.ts';
+import { grokProvider } from '../../plugins/multi-grok/src/provider.ts';
 import { removeTemporary } from '../temporary.ts';
+import { createNativeGateway } from './support/runtime.ts';
 
 const context: PermissionContext = { permissionMode: 'auto', cwd: process.cwd() };
 const agyModel = {
@@ -493,7 +498,6 @@ test('an Antigravity worker writes each finished step as a native-named row and 
     authFile: 'unused',
     modBridge: new ModBridge(),
     displayRows: new DisplayRows(),
-    displayTools: { antigravity: ANTIGRAVITY_TOOLS },
     antigravity: admitted(harness),
   });
   assert.deepEqual(await register(), [...ANTIGRAVITY_TOOLS]);
@@ -592,29 +596,81 @@ test('a Grok worker writes its native tool calls as rows under their native name
     },
   });
   t.after(() => harness.close());
-  const { send, status, register, verify } = await gateway(t, {
+  const runtime = new ProviderRuntime(
+    [
+      { descriptor: grokProvider, models: [], harness: admitted(harness) },
+      {
+        descriptor: { ...cursorProvider, displayTools: ['unused_without_cursor'] },
+        models: [],
+      },
+    ],
+    { registry: createBuiltinRegistry() },
+  );
+  const server = createNativeGatewayProduction({
     token: 'progress-token',
-    authFile: 'unused',
+    runtime,
     modBridge: new ModBridge(),
-    displayTools: { grok: GROK_TOOLS, cursor: ['unused_without_cursor'] },
-    grok: admitted(harness),
   });
-  const names = await register();
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => {
+    server.closeAllConnections();
+    return new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+  const address = server.address();
+  assert(address && typeof address !== 'string');
+  const base = `http://127.0.0.1:${address.port}`;
+  const headers = { 'x-multi-gateway-token': 'progress-token' };
+  const post = (route: string, payload: unknown) =>
+    fetch(`${base}${route}`, {
+      method: 'POST',
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  const names = (
+    (await (await fetch(`${base}/multi/mod/display-tools`, { headers })).json()) as {
+      names: string[];
+    }
+  ).names;
+  await post('/multi/mod/display-tools', { sessionId: 'progress-session', registered: names });
   assert.ok(names.includes('read_file'));
   assert.ok(!names.includes('unused_without_cursor'), 'only running harnesses offer rows');
-  const response = (await (await send(grokModel.model, 'grok-worker')).json()) as MessagesResponse;
+  const response = (await (
+    await fetch(`${base}/v1/messages`, {
+      method: 'POST',
+      headers: {
+        ...headers,
+        'content-type': 'application/json',
+        'x-claude-code-session-id': 'progress-session',
+        'x-claude-code-agent-id': 'grok-worker',
+      },
+      body: JSON.stringify({
+        model: grokModel.model,
+        messages: [{ role: 'user', content: 'work' }],
+      }),
+    })
+  ).json()) as MessagesResponse;
   const [row] = rowsOf(response);
   assert.equal(row?.name, 'mcp__multi-core__read_file');
   const input = row?.input as Record<string, unknown>;
   assert.equal(input.kind, 'Read');
   assert.equal(input.file_path, 'README.md');
   assert.equal((input.native as Record<string, unknown>).path, 'README.md');
-  assert.deepEqual(await (await verify(input[ROW_TOKEN], row?.id)).json(), {
-    output: '# Multi',
-    isError: false,
-  });
+  assert.deepEqual(
+    await (
+      await post('/multi/mod/display', {
+        sessionId: 'progress-session',
+        token: input[ROW_TOKEN],
+        toolUseId: row?.id,
+      })
+    ).json(),
+    { output: '# Multi', isError: false },
+  );
   assert.match(response.multi_followup ?? '', /^read it\n\n\[Grok\] 1 native action: 1 read\./);
-  assert.equal((await status('grok-worker')).state, 'completed');
+  const status = (await fetch(
+    `${base}/multi/mod/lifecycle?sessionId=progress-session&agentId=grok-worker`,
+    { headers },
+  ).then((result) => result.json())) as Record<string, unknown>;
+  assert.equal(status.state, 'completed');
 });
 
 test('without the mod registering display tools, a run writes no rows', async (t) => {
@@ -641,7 +697,6 @@ test('without the mod registering display tools, a run writes no rows', async (t
   const { send } = await gateway(t, {
     token: 'progress-token',
     authFile: 'unused',
-    displayTools: { grok: GROK_TOOLS },
     grok: admitted(harness),
   });
   const response = (await (await send(grokModel.model, 'grok-worker')).json()) as MessagesResponse;
@@ -764,7 +819,6 @@ test('a follow-up is answered only to the session and worker whose reply wrote t
     authFile: 'unused',
     modBridge: new ModBridge(),
     displayRows: new DisplayRows(),
-    displayTools: { antigravity: ANTIGRAVITY_TOOLS },
     antigravity: admitted(harness),
   });
   await register('session-a');
@@ -824,7 +878,6 @@ test('a follow-up is recovered from the harness record after a restart, and fail
     token: 'progress-token',
     authFile: 'unused',
     displayRows: new DisplayRows(),
-    displayTools: { antigravity: ANTIGRAVITY_TOOLS },
     antigravity: admitted(first),
   });
   await before.register('session-a');
@@ -842,7 +895,6 @@ test('a follow-up is recovered from the harness record after a restart, and fail
     token: 'progress-token',
     authFile: 'unused',
     displayRows: new DisplayRows(),
-    displayTools: { antigravity: ANTIGRAVITY_TOOLS },
     antigravity: admitted(second),
   });
   const recovered = await after.send(agyModel.model, 'agy-worker', rowResults(answer), 'session-a');
