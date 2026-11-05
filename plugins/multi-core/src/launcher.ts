@@ -20,17 +20,15 @@ import {
 } from '../../multi-antigravity/src/models.ts';
 import { antigravityPermissionPolicy } from '../../multi-antigravity/src/permissions.ts';
 import { ANTIGRAVITY_TOOLS } from '../../multi-antigravity/src/progress.ts';
+import { discoverAntigravity } from '../../multi-antigravity/src/provider.ts';
 import { antigravityUsageReader } from '../../multi-antigravity/src/usage-adapter.ts';
 import type { Effort } from '../../multi-core/src/gateway/responses.ts';
 import { CursorHarness } from '../../multi-cursor/src/harness.ts';
 import type { CursorModelOption } from '../../multi-cursor/src/models.ts';
-import {
-  CURSOR_DEFAULT_WORKER_MODEL,
-  cursorModelOptions,
-  cursorPickerOptions,
-} from '../../multi-cursor/src/models.ts';
+import { CURSOR_DEFAULT_WORKER_MODEL, cursorPickerOptions } from '../../multi-cursor/src/models.ts';
 import { cursorPermissionPolicy } from '../../multi-cursor/src/permissions.ts';
 import { CURSOR_TOOLS } from '../../multi-cursor/src/progress.ts';
+import { discoverCursor } from '../../multi-cursor/src/provider.ts';
 import { cursorUsageReader } from '../../multi-cursor/src/usage-adapter.ts';
 import { CursorWorkspaces } from '../../multi-cursor/src/workspaces.ts';
 import { GrokHarness } from '../../multi-grok/src/harness.ts';
@@ -41,16 +39,16 @@ import {
   grokPickerOptions,
 } from '../../multi-grok/src/models.ts';
 import { GROK_TOOLS, grokPermissionPolicy } from '../../multi-grok/src/permissions.ts';
+import { discoverGrok } from '../../multi-grok/src/provider.ts';
 import { grokUsageReader } from '../../multi-grok/src/usage-adapter.ts';
-import { createOpenAIReviewer, discoverOpenAIReviewer } from '../../multi-openai/src/approval.ts';
-import { readCodexAuth } from '../../multi-openai/src/auth.ts';
+import { createOpenAIReviewer } from '../../multi-openai/src/approval.ts';
 import {
   MODELS,
   OPENAI_DEFAULT_WORKER_MODEL,
   OPENAI_WORKER_EFFORT,
 } from '../../multi-openai/src/models.ts';
+import { discoverOpenAI } from '../../multi-openai/src/provider.ts';
 import { openAIUsageReader } from '../../multi-openai/src/usage-adapter.ts';
-import { readZenKey } from '../../multi-zen/src/auth.ts';
 import {
   ZEN_DEFAULT_WORKER_MODEL,
   ZEN_MODELS,
@@ -58,6 +56,7 @@ import {
   zenModelOptions,
   zenPickerOptions,
 } from '../../multi-zen/src/models.ts';
+import { discoverZen } from '../../multi-zen/src/provider.ts';
 import { zenUsageReader } from '../../multi-zen/src/usage-adapter.ts';
 import {
   loadWorkerPermissions,
@@ -93,6 +92,20 @@ import { needsEnvProxy, rememberOriginalEnvironment, withoutGateway } from './in
 const enabledProviders = providerSelection(process.env.MULTI_ENABLED_PROVIDERS);
 const providerEnabled = (provider: string) =>
   enabledProviders?.some((name) => name === provider) ?? true;
+const discoveryContext = (provider: string) => ({
+  cwd: process.cwd(),
+  env: process.env,
+  explicit:
+    providerEnabled(provider) && Boolean(enabledProviders?.some((name) => name === provider)),
+  log: (message: string) => console.error(message),
+});
+async function discoverAntigravityForLaunch() {
+  const models = await discoverAntigravity(discoveryContext('antigravity'));
+  if (enabledProviders?.includes('antigravity') && models.length) {
+    await installAntigravityHook();
+  }
+  return models;
+}
 const claudeExecutable = process.env.MULTI_REAL_CLAUDE;
 
 /**
@@ -138,7 +151,7 @@ async function main() {
   const args = process.argv.slice(2);
   await handleCommand(args[0]);
   if (args[0] === '--cursor-models') {
-    const { cursorModels, cursorSignedIn } = await discoverCursor(true);
+    const { cursorModels, cursorSignedIn } = await discoverCursor(discoveryContext('cursor'), true);
     printCursorModels(cursorModels, cursorSignedIn);
     return;
   }
@@ -166,11 +179,11 @@ async function main() {
   ] = await Promise.all([
     pluginInventoryOrEmpty(process.cwd(), args),
     anthropicSignedIn(),
-    discoverCursor(false),
-    discoverOpenAI(authFile),
-    providerEnabled('zen') ? readZenKey() : Promise.resolve(undefined),
-    discoverAntigravity(),
-    discoverGrok(),
+    discoverCursor(discoveryContext('cursor'), false),
+    discoverOpenAI(discoveryContext('openai')),
+    discoverZen(discoveryContext('zen')),
+    discoverAntigravityForLaunch(),
+    discoverGrok(discoveryContext('grok')),
   ]);
   const cursorPicker = selectedCursorOptions(cursorModels, fullCatalog);
   const token = randomBytes(32).toString('hex');
@@ -470,35 +483,6 @@ function providerUsageReaders(
   };
 }
 
-async function discoverCursor(required: boolean) {
-  if (!providerEnabled('cursor')) {
-    return { cursorModels: [] as CursorModelOption[], cursorSignedIn: false };
-  }
-  const { Cursor } = await import('@cursor/sdk');
-  const cursorSignedIn =
-    Boolean(process.env.CURSOR_API_KEY) || (await Cursor.auth.status()).status === 'logged-in';
-  let cursorModels: CursorModelOption[] = [];
-  if (cursorSignedIn) {
-    let timer: NodeJS.Timeout | undefined;
-    try {
-      const timeout = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('Cursor model discovery timed out')), 15000);
-      });
-      cursorModels = cursorModelOptions(await Promise.race([Cursor.models.list(), timeout]));
-    } catch (error) {
-      if (required) {
-        throw error;
-      }
-      console.error(
-        `Cursor choices unavailable: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-  return { cursorModels, cursorSignedIn };
-}
-
 function recordValue(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -663,31 +647,6 @@ async function anthropicSignedIn(): Promise<boolean> {
     stdout = failedAuthProbeOutput(error);
   }
   return parseAuthProbeOutput(stdout);
-}
-
-async function discoverOpenAI(authFile: string) {
-  if (!providerEnabled('openai')) {
-    return { codexSignedIn: false, openaiReview: false };
-  }
-  let codexSignedIn = false;
-  try {
-    await readCodexAuth(authFile);
-    codexSignedIn = true;
-  } catch {
-    console.error('OpenAI choices unavailable: sign in with codex login to enable them.');
-  }
-  let openaiReview = false;
-  if (codexSignedIn) {
-    try {
-      openaiReview = await discoverOpenAIReviewer(authFile);
-    } catch {
-      /* Missing capability leaves auto mode unreviewed; inference remains available. */
-    }
-    if (!openaiReview) {
-      console.error('OpenAI reviewer unavailable; actions in auto mode run unreviewed.');
-    }
-  }
-  return { codexSignedIn, openaiReview };
 }
 
 /** One admission result is shared by every native provider, so it has to be judged by the
@@ -1235,43 +1194,6 @@ async function pluginInventoryOrEmpty(cwd: string, args: readonly string[]) {
 function traceEvent(event: GatewayEvent) {
   if (process.env.MULTI_NATIVE_TRACE === '1') {
     process.stderr.write(`[native] ${JSON.stringify(event)}\n`);
-  }
-}
-
-async function discoverAntigravity() {
-  let antigravityModels: AntigravityModel[] = [];
-  if (providerEnabled('antigravity') && process.env.MULTI_ANTIGRAVITY === '1') {
-    try {
-      resolveExecutable('agy');
-      antigravityModels = await discoverAntigravityModels();
-    } catch (error) {
-      // A missing or signed-out agy removes Antigravity rows; it never blocks other providers.
-      console.error(
-        `Antigravity choices unavailable: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  }
-  if (enabledProviders?.includes('antigravity') && antigravityModels.length) {
-    await installAntigravityHook();
-  }
-  return antigravityModels;
-}
-
-async function discoverGrok(): Promise<GrokModel[]> {
-  if (!providerEnabled('grok')) {
-    return [];
-  }
-  try {
-    resolveExecutable('grok');
-    return await discoverGrokModels();
-  } catch (error) {
-    // Silent when the plugin is merely present: only an enabled provider reports.
-    if (enabledProviders?.includes('grok')) {
-      console.error(
-        `Grok choices unavailable: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-    return [];
   }
 }
 

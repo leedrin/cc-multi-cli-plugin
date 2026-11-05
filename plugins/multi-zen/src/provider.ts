@@ -1,5 +1,8 @@
 import { decodeModelRoute } from '../../multi-core/src/gateway/model-identity.ts';
-import type { ProviderDescriptor } from '../../multi-core/src/gateway/provider-registry.ts';
+import type {
+  ProviderDescriptor,
+  ProviderDiscoveryContext,
+} from '../../multi-core/src/gateway/provider-registry.ts';
 import { readZenKey } from './auth.ts';
 import { prepareZenRequest, zenSignaturePrefixes, zenUnavailable } from './gateway-request.ts';
 import { ZEN_MODELS } from './models.ts';
@@ -12,6 +15,20 @@ function modelIdentity(route: string) {
   return identity;
 }
 
+export interface ZenDiscoveryDeps {
+  readKey?: typeof readZenKey;
+}
+
+export async function discoverZen(
+  context: ProviderDiscoveryContext,
+  deps: ZenDiscoveryDeps = {},
+): Promise<string | undefined> {
+  if (context.env.MULTI_ENABLED_PROVIDERS !== undefined && !context.explicit) {
+    return undefined;
+  }
+  return (deps.readKey ?? readZenKey)({ env: context.env });
+}
+
 export const zenProvider: ProviderDescriptor = {
   id: 'zen',
   plugin: 'zen',
@@ -20,16 +37,17 @@ export const zenProvider: ProviderDescriptor = {
   autoReview: { review: 'none', statement: 'no auto mode: actions run unreviewed' },
   unavailableMessage: zenUnavailable,
   worker: { type: 'multi-zen' },
-  availability: async ({ env }) => {
+  availability: async (context) => {
     try {
-      const apiKey = await readZenKey({ env });
+      const apiKey = await discoverZen(context);
       return apiKey ? { available: true } : { available: false, reason: zenUnavailable };
     } catch (error) {
       return { available: false, reason: error instanceof Error ? error.message : String(error) };
     }
   },
-  discoverModels: async () =>
-    ZEN_MODELS.map((model) => ({
+  discoverModels: async (context) => {
+    const apiKey = await discoverZen(context);
+    return (apiKey ? ZEN_MODELS : []).map((model) => ({
       identity: modelIdentity(`multi/zen/${model.id}`),
       label: model.label,
       description: model.description,
@@ -44,7 +62,8 @@ export const zenProvider: ProviderDescriptor = {
         reasoning: Boolean(model.efforts),
       },
       ...(model.efforts ? { reasoning: { efforts: model.efforts } } : {}),
-    })),
+    }));
+  },
   direct: {
     signaturePrefixes: zenSignaturePrefixes,
     prepare: (input) => prepareZenRequest(input, process.env.OPENCODE_API_KEY ?? ''),

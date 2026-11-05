@@ -1,5 +1,8 @@
 import { decodeModelRoute } from '../../multi-core/src/gateway/model-identity.ts';
-import type { ProviderDescriptor } from '../../multi-core/src/gateway/provider-registry.ts';
+import type {
+  ProviderDescriptor,
+  ProviderDiscoveryContext,
+} from '../../multi-core/src/gateway/provider-registry.ts';
 import { GrokHarness } from './harness.ts';
 import { discoverGrokModels } from './models.ts';
 
@@ -11,6 +14,35 @@ function modelIdentity(route: string) {
   return identity;
 }
 
+export interface GrokDiscoveryDeps {
+  resolveExecutable?: (env: NodeJS.ProcessEnv) => void;
+  discoverModels?: typeof discoverGrokModels;
+  throwOnError?: boolean;
+}
+
+export async function discoverGrok(
+  context: ProviderDiscoveryContext,
+  deps: GrokDiscoveryDeps = {},
+): Promise<Awaited<ReturnType<typeof discoverGrokModels>>> {
+  if (context.env.MULTI_ENABLED_PROVIDERS !== undefined && !context.explicit) {
+    return [];
+  }
+  try {
+    deps.resolveExecutable?.(context.env);
+    return await (deps.discoverModels ?? discoverGrokModels)({ env: context.env });
+  } catch (error) {
+    if (deps.throwOnError) {
+      throw error;
+    }
+    if (context.explicit) {
+      context.log(
+        `Grok choices unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    return [];
+  }
+}
+
 export const grokProvider: ProviderDescriptor = {
   id: 'grok',
   plugin: 'grok',
@@ -19,16 +51,18 @@ export const grokProvider: ProviderDescriptor = {
   autoReview: { review: 'none', statement: 'no auto mode: actions run unreviewed' },
   unavailableMessage: 'Grok is unavailable. Install Grok Build, run grok login, and relaunch.',
   worker: { type: 'multi-grok' },
-  availability: async ({ env }) => {
+  availability: async (context) => {
     try {
-      await discoverGrokModels({ env });
-      return { available: true };
+      const models = await discoverGrok(context, { throwOnError: true });
+      return models.length
+        ? { available: true }
+        : { available: false, reason: 'Grok models are unavailable.' };
     } catch (error) {
       return { available: false, reason: error instanceof Error ? error.message : String(error) };
     }
   },
-  discoverModels: async ({ env }) =>
-    (await discoverGrokModels({ env })).map((model) => ({
+  discoverModels: async (context) =>
+    (await discoverGrok(context, { throwOnError: true })).map((model) => ({
       identity: modelIdentity(model.model),
       label: model.label,
       protocol: 'native-harness',

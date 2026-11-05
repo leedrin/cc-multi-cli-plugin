@@ -11,9 +11,11 @@ interface ProviderAvailability {
   reason?: string;
 }
 
-interface ProviderDiscoveryContext {
+export interface ProviderDiscoveryContext {
   cwd: string;
   env: NodeJS.ProcessEnv;
+  explicit: boolean;
+  log: (message: string) => void;
   signal?: AbortSignal;
 }
 

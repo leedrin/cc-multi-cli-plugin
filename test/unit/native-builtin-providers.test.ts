@@ -69,7 +69,12 @@ test('Registry prefixes, review policies, and harness unavailable messages retai
 });
 
 test('Antigravity and Grok discovery honor the supplied environment without spawning', async () => {
-  const context = { cwd: process.cwd(), env: { PATH: '' } };
+  const context = {
+    cwd: process.cwd(),
+    env: { PATH: '', MULTI_ANTIGRAVITY: '1' },
+    explicit: true,
+    log: () => {},
+  };
   for (const id of ['antigravity', 'grok'] as const) {
     const descriptor = BUILTIN_PROVIDERS.find((provider) => provider.id === id);
     assert(descriptor);
@@ -122,7 +127,12 @@ for (const id of ['antigravity', 'grok'] as const) {
         '../../plugins/multi-core/src/gateway/builtin-providers.ts',
         import.meta.url,
       ).href;
-      const context = { cwd: directory, env: isolatedEnvironment(bin) };
+      const context = {
+        cwd: directory,
+        env: { ...isolatedEnvironment(bin), MULTI_ANTIGRAVITY: '1' },
+        explicit: true,
+        log: () => {},
+      };
       // The fresh process has no real CLI on PATH even if a callback regresses to process.env.
       const { stdout, stderr } = await promisify(execFile)(
         process.execPath,

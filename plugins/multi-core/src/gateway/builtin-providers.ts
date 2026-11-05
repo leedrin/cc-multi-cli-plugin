@@ -13,8 +13,12 @@ export const BUILTIN_PROVIDERS: readonly ProviderDescriptor[] = [
   grokProvider,
 ];
 
+export function registerBuiltinProviders(registry: ProviderRegistry): void {
+  registry.registerMany(BUILTIN_PROVIDERS);
+}
+
 export function createBuiltinRegistry(): ProviderRegistry {
   const registry = new ProviderRegistry();
-  registry.registerMany(BUILTIN_PROVIDERS);
+  registerBuiltinProviders(registry);
   return registry;
 }
