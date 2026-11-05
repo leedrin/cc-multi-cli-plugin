@@ -63,6 +63,7 @@ import {
   type PluginPermissionInventory,
   pluginPermissions,
 } from './gateway/agent-definitions.ts';
+import { registerBuiltinProviders } from './gateway/builtin-providers.ts';
 import { DISPLAY_TOOL_SERVER } from './gateway/display-rows.ts';
 import { executableInvocation, resolveExecutable } from './gateway/executable.ts';
 import {
@@ -75,6 +76,7 @@ import { PermissionModes } from './gateway/mode-hook.ts';
 import { decodeModelRoute } from './gateway/model-identity.ts';
 import { nestedClaudeShim, withPathPrefix } from './gateway/nested-env.ts';
 import { nativeSpelling } from './gateway/provider.ts';
+import { type ProviderDiscoveryContext, ProviderRegistry } from './gateway/provider-registry.ts';
 import type { ProviderUsageReader } from './gateway/provider-usage.ts';
 import { ReceiptLedger } from './gateway/receipts.ts';
 import type { GatewayEvent } from './gateway/server.ts';
@@ -85,28 +87,50 @@ import {
   type WorkerProvider,
   workerDescription,
 } from './gateway/worker-catalog.ts';
-
 import { providerSelection } from './install/plugins.ts';
 import { needsEnvProxy, rememberOriginalEnvironment, withoutGateway } from './install/process.ts';
+import {
+  discoverAntigravityWithHook,
+  discoverEnabledProviders,
+  providerExplicit,
+} from './provider-discovery.ts';
 
 const enabledProviders = providerSelection(process.env.MULTI_ENABLED_PROVIDERS);
-const providerEnabled = (provider: string) =>
-  enabledProviders?.some((name) => name === provider) ?? true;
-const discoveryContext = (provider: string) => ({
+const enabledProviderIds: readonly string[] | undefined = enabledProviders;
+const discoveryContext = (provider: string): ProviderDiscoveryContext => ({
   cwd: process.cwd(),
   env: process.env,
-  explicit:
-    providerEnabled(provider) && Boolean(enabledProviders?.some((name) => name === provider)),
+  explicit: providerExplicit(provider, enabledProviderIds),
   log: (message: string) => console.error(message),
 });
-async function discoverAntigravityForLaunch() {
-  const models = await discoverAntigravity(discoveryContext('antigravity'));
-  if (enabledProviders?.includes('antigravity') && models.length) {
-    await installAntigravityHook();
-  }
-  return models;
-}
 const claudeExecutable = process.env.MULTI_REAL_CLAUDE;
+
+async function discoverLaunchProviders() {
+  const registry = new ProviderRegistry();
+  registerBuiltinProviders(registry);
+  const discoveries = {
+    openai: (context: ProviderDiscoveryContext) => discoverOpenAI(context),
+    zen: (context: ProviderDiscoveryContext) => discoverZen(context),
+    cursor: (context: ProviderDiscoveryContext) => discoverCursor(context, false),
+    antigravity: (context: ProviderDiscoveryContext) =>
+      discoverAntigravityWithHook(context, discoverAntigravity, installAntigravityHook),
+    grok: (context: ProviderDiscoveryContext) => discoverGrok(context),
+  };
+  const discovered = await discoverEnabledProviders(
+    registry,
+    enabledProviderIds,
+    discoveries,
+    discoveryContext,
+  );
+  return {
+    codexSignedIn: discovered.openai?.codexSignedIn ?? false,
+    openaiReview: discovered.openai?.openaiReview ?? false,
+    cursorModels: discovered.cursor?.cursorModels ?? [],
+    zenKey: discovered.zen,
+    antigravityModels: discovered.antigravity ?? [],
+    grokModels: discovered.grok ?? [],
+  };
+}
 
 /**
  * Claude Code requires a non-empty subagent prompt. Workers get no behavioral rules here;
@@ -168,23 +192,13 @@ async function main() {
     'auth.json',
   );
   // Independent probes run together: Cursor's model listing alone can take 15 s.
-  const [
-    pluginInventory,
-    anthropic,
-    { cursorModels },
-    { codexSignedIn, openaiReview },
-    zenKey,
-    antigravityModels,
-    grokModels,
-  ] = await Promise.all([
+  const [pluginInventory, anthropic, discovered] = await Promise.all([
     pluginInventoryOrEmpty(process.cwd(), args),
     anthropicSignedIn(),
-    discoverCursor(discoveryContext('cursor'), false),
-    discoverOpenAI(discoveryContext('openai')),
-    discoverZen(discoveryContext('zen')),
-    discoverAntigravityForLaunch(),
-    discoverGrok(discoveryContext('grok')),
+    discoverLaunchProviders(),
   ]);
+  const { codexSignedIn, openaiReview, cursorModels, zenKey, antigravityModels, grokModels } =
+    discovered;
   const cursorPicker = selectedCursorOptions(cursorModels, fullCatalog);
   const token = randomBytes(32).toString('hex');
   const defaultModels = fullCatalog
