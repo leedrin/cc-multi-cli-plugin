@@ -41,6 +41,7 @@
   },
   "dependencies": {
     "@cursor/sdk": "1.0.31",
+    "@earendil-works/pi-ai": "1.4.0",
     "js-tiktoken": "1.0.21",
     "yaml": "2.9.0"
   }
