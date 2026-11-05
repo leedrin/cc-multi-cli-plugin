@@ -75,7 +75,9 @@ export interface ProviderDescriptor {
   plugin: string;
   label: string;
   kind: ProviderKind;
+  /** Credentials held by the gateway; do not pass them to nested Claude. */
   credentialEnv?: readonly string[];
+  runs?: string;
   autoReview: AutoReviewPolicy;
   availability(context: ProviderDiscoveryContext): Promise<ProviderAvailability>;
   discoverModels(context: ProviderDiscoveryContext): Promise<readonly ModelDescriptor[]>;

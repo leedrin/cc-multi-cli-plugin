@@ -74,6 +74,7 @@ import { PermissionModes } from './gateway/mode-hook.ts';
 import { decodeModelRoute } from './gateway/model-identity.ts';
 import { nestedClaudeShim, withPathPrefix } from './gateway/nested-env.ts';
 import { nativeSpelling } from './gateway/provider.ts';
+import { PROVIDER_FACTS, type ProviderId } from './gateway/provider-facts.ts';
 import {
   type ActiveProvider,
   type ProviderDiscoveryContext,
@@ -87,7 +88,6 @@ import { createNativeGateway } from './gateway/server.ts';
 import {
   buildWorkerCatalog,
   type WorkerCatalog,
-  type WorkerProvider,
   workerDescription,
 } from './gateway/worker-catalog.ts';
 import { providerSelection } from './install/plugins.ts';
@@ -125,13 +125,40 @@ async function discoverLaunchProviders() {
     discoveries,
     discoveryContext,
   );
+  const codexSignedIn = discovered.openai?.codexSignedIn ?? false;
+  const cursorModels = discovered.cursor?.cursorModels ?? [];
+  const antigravityModels = discovered.antigravity ?? [];
+  const grokModels = discovered.grok ?? [];
+  const zenKey = discovered.zen;
+  const availableProviderIds = PROVIDER_FACTS.filter(({ id }) => {
+    if (!registry.get(id) || !Object.hasOwn(discovered, id)) {
+      return false;
+    }
+    if (id === 'openai') {
+      return codexSignedIn;
+    }
+    if (id === 'zen') {
+      return Boolean(zenKey);
+    }
+    if (id === 'cursor') {
+      return cursorModels.length > 0;
+    }
+    if (id === 'antigravity') {
+      return antigravityModels.length > 0;
+    }
+    if (id === 'grok') {
+      return grokModels.length > 0;
+    }
+    return false;
+  }).map(({ id }) => id);
   return {
-    codexSignedIn: discovered.openai?.codexSignedIn ?? false,
+    codexSignedIn,
     openaiReview: discovered.openai?.openaiReview ?? false,
-    cursorModels: discovered.cursor?.cursorModels ?? [],
-    zenKey: discovered.zen,
-    antigravityModels: discovered.antigravity ?? [],
-    grokModels: discovered.grok ?? [],
+    cursorModels,
+    zenKey,
+    antigravityModels,
+    grokModels,
+    availableProviderIds,
   };
 }
 
@@ -200,8 +227,15 @@ async function main() {
     anthropicSignedIn(),
     discoverLaunchProviders(),
   ]);
-  const { codexSignedIn, openaiReview, cursorModels, zenKey, antigravityModels, grokModels } =
-    discovered;
+  const {
+    codexSignedIn,
+    openaiReview,
+    cursorModels,
+    zenKey,
+    antigravityModels,
+    grokModels,
+    availableProviderIds,
+  } = discovered;
   const cursorPicker = selectedCursorOptions(cursorModels, fullCatalog);
   const token = randomBytes(32).toString('hex');
   const defaultModels = fullCatalog
@@ -211,6 +245,8 @@ async function main() {
         Boolean(zenKey),
         antigravityModels,
         grokModels,
+        false,
+        availableProviderIds,
       ).modelPicker.options.map((option) => option.model)
     : [];
   const settings = pickerSettings(
@@ -220,6 +256,7 @@ async function main() {
     antigravityModels,
     grokModels,
     fullCatalog,
+    availableProviderIds,
   );
   await mergeSettings(args, settings);
   // Agent view and background sessions are off for this session only, through the
@@ -240,7 +277,8 @@ async function main() {
   );
   const usageReaders = providerUsageReaders(authFile, zenKey, { cursor, antigravity, grok });
   const workers = workerCatalog(settings.modelPicker.options, grokModels);
-  const agents = workerDefinitions(workers);
+  const workerRegistry = createBuiltinRegistry({ authFile, zenKey });
+  const agents = workerDefinitions(workers, workerRegistry);
   const modBridge = new ModBridge();
   const settingsDir = await mkdtemp(path.join(os.tmpdir(), 'multi-native-settings-'));
   const callerSettingsFile = path.join(settingsDir, 'caller-settings.json');
@@ -303,7 +341,7 @@ async function main() {
   }
   await writeFile(settingsFile, JSON.stringify(settings), { mode: 0o600 });
   const definitions = JSON.stringify(agents);
-  const baseEnvironment = gatewayEnvironment(address.port, token, anthropic);
+  const baseEnvironment = gatewayEnvironment(address.port, token, anthropic, workerRegistry);
   const claudePath = resolveExecutable('claude', {
     configuredPath: claudeExecutable,
     env: baseEnvironment,
@@ -723,31 +761,34 @@ export function workerCatalog(
   });
 }
 
-const WORKER_RUNS: Readonly<Record<WorkerProvider, string>> = {
-  openai: "Claude Code's tools",
-  zen: "Claude Code's tools",
-  cursor: 'native Cursor agent',
-  antigravity: 'native Antigravity CLI',
-  grok: 'native Grok Build CLI',
-};
-
 /**
  * One Agent type per signed-in provider. The definition's model is the provider's
  * default; an Agent call's `model` selects another, resolved by the mod at spawn.
  */
-export function workerDefinitions(catalog: WorkerCatalog): Record<string, AgentDefinition> {
+export function workerDefinitions(
+  catalog: WorkerCatalog,
+  registry: ProviderRegistry = createBuiltinRegistry(),
+): Record<string, AgentDefinition> {
   const agents: Record<string, AgentDefinition> = {};
   for (const worker of Object.values(catalog)) {
-    const direct = worker.provider === 'openai' || worker.provider === 'zen';
+    const fact = PROVIDER_FACTS.find(({ id }) => id === worker.provider);
+    if (!fact) {
+      throw new Error(`Unknown worker provider ${worker.provider}`);
+    }
+    const descriptor = registry.get(worker.provider);
+    const runs = descriptor?.runs ?? (fact.kind === 'direct' ? "Claude Code's tools" : undefined);
+    if (!runs) {
+      throw new Error(`Harness provider ${worker.provider} is missing a runs description`);
+    }
     const model = worker.models.find((entry) => entry.id === worker.defaultId)?.model;
     if (!model) {
       continue;
     }
     agents[worker.type] = {
-      description: workerDescription(worker, WORKER_RUNS[worker.provider]),
+      description: workerDescription(worker, runs),
       prompt: WORKER_PROMPT,
       model,
-      tools: direct ? CLAUDE_WORKER_TOOLS : HARNESS_WORKER_TOOLS,
+      tools: fact.kind === 'direct' ? CLAUDE_WORKER_TOOLS : HARNESS_WORKER_TOOLS,
       ...(worker.effort ? { effort: worker.effort as Effort } : {}),
     };
   }
@@ -1077,58 +1118,112 @@ function optedOut(value: string | undefined): boolean {
   return value !== undefined && !['', '0', 'false', 'no', 'off'].includes(value.toLowerCase());
 }
 
-function pickerSettings(
+const PICKER_PROVIDER_ORDER: readonly ProviderId[] = [
+  'openai',
+  'cursor',
+  'antigravity',
+  'grok',
+  'zen',
+];
+
+export function pickerSettings(
   codexSignedIn: boolean,
   cursorPicker: CursorModelOption[],
   zen: boolean,
   antigravityModels: AntigravityModel[],
   grokModels: GrokModel[],
   fullCatalog = false,
-) {
+  availableProviderIds: readonly string[] = [],
+): LaunchSettings {
   let zenOptions = zenPickerOptions('');
   if (zen) {
     zenOptions = fullCatalog ? zenModelOptions() : zenPickerOptions(process.env.MULTI_ZEN_MODELS);
   }
-  const settings: LaunchSettings = {
-    modelPicker: {
-      options: [
-        ...Object.values(codexSignedIn ? MODELS : {}).map((model) => ({
-          model: `multi/openai/${model}`,
-          label: model,
-          description: 'OpenAI subscription · native Claude Code harness',
-          behavesAs: pickerProfile(true),
-        })),
-        ...cursorPicker.map(({ model, label, description, catalog }) => ({
-          model,
-          label,
-          description,
-          behavesAs: pickerProfile(
-            catalog.parameters?.some(({ id }) => ['effort', 'reasoning_effort'].includes(id)) ??
-              false,
-          ),
-        })),
-        ...antigravityPickerOptions(antigravityModels).map(({ model, label, id }) => ({
-          model: oneMillionContext(model, id),
-          label,
-          behavesAs: pickerProfile(true),
-          description: 'Native Antigravity CLI',
-        })),
-        ...grokPickerOptions(grokModels, process.env.MULTI_GROK_MODELS).map(({ model, label }) => ({
-          model,
-          label: `Grok - ${label}`,
-          behavesAs: pickerProfile(true),
-          description: 'Grok subscription; native Grok Build CLI',
-        })),
-        ...zenOptions.map(({ model, label, efforts }) => ({
-          model,
-          label: `Zen · ${label}`,
-          behavesAs: pickerProfile(Boolean(efforts?.length)),
-          description: `Zen API billing · Claude tools${efforts ? '' : ' · native reasoning; /effort not applicable'}`,
-        })),
-      ],
-    },
+  const available = new Set<ProviderId>();
+  if (codexSignedIn) {
+    available.add('openai');
+  }
+  if (cursorPicker.length) {
+    available.add('cursor');
+  }
+  if (antigravityModels.length) {
+    available.add('antigravity');
+  }
+  if (grokModels.length) {
+    available.add('grok');
+  }
+  if (zen) {
+    available.add('zen');
+  }
+  const builders: Partial<Record<ProviderId, () => ModelOption[]>> = {
+    openai: () =>
+      Object.values(MODELS).map((model) => ({
+        model: `multi/openai/${model}`,
+        label: model,
+        description: 'OpenAI subscription · native Claude Code harness',
+        behavesAs: pickerProfile(true),
+      })),
+    cursor: () =>
+      cursorPicker.map(({ model, label, description, catalog }) => ({
+        model,
+        label,
+        description,
+        behavesAs: pickerProfile(
+          catalog.parameters?.some(({ id }) => ['effort', 'reasoning_effort'].includes(id)) ??
+            false,
+        ),
+      })),
+    antigravity: () =>
+      antigravityPickerOptions(antigravityModels).map(({ model, label, id }) => ({
+        model: oneMillionContext(model, id),
+        label,
+        behavesAs: pickerProfile(true),
+        description: 'Native Antigravity CLI',
+      })),
+    grok: () =>
+      grokPickerOptions(grokModels, process.env.MULTI_GROK_MODELS).map(({ model, label }) => ({
+        model,
+        label: `Grok - ${label}`,
+        behavesAs: pickerProfile(true),
+        description: 'Grok subscription; native Grok Build CLI',
+      })),
+    zen: () =>
+      zenOptions.map(({ model, label, efforts }) => ({
+        model,
+        label: `Zen · ${label}`,
+        behavesAs: pickerProfile(Boolean(efforts?.length)),
+        description: `Zen API billing · Claude tools${efforts ? '' : ' · native reasoning; /effort not applicable'}`,
+      })),
   };
-  return settings;
+  for (const provider of availableProviderIds) {
+    available.add(provider as ProviderId);
+  }
+  const options = pickerRowsForProviders([...available], builders);
+  return { modelPicker: { options } };
+}
+
+export function pickerRowsForProviders(
+  providerIds: readonly string[],
+  builders: Partial<Record<ProviderId, () => ModelOption[]>>,
+): ModelOption[] {
+  const available = new Set(providerIds);
+  for (const provider of available) {
+    if (!PROVIDER_FACTS.some((fact) => fact.id === provider)) {
+      throw new Error(`Unknown picker provider ${provider}`);
+    }
+    if (!builders[provider as ProviderId]) {
+      throw new Error(`Picker provider ${provider} has no row builder`);
+    }
+  }
+  const ordered = [
+    ...PICKER_PROVIDER_ORDER,
+    ...PROVIDER_FACTS.map(({ id }) => id).filter(
+      (provider) => !PICKER_PROVIDER_ORDER.includes(provider),
+    ),
+  ];
+  return ordered.flatMap((provider) =>
+    available.has(provider) ? (builders[provider]?.() ?? []) : [],
+  );
 }
 
 /**
@@ -1160,11 +1255,20 @@ function translateTrafficPolicy(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   };
 }
 
-function gatewayEnvironment(port: number, token: string, anthropic: boolean) {
+export function gatewayEnvironment(
+  port: number,
+  token: string,
+  anthropic: boolean,
+  registry: ProviderRegistry = createBuiltinRegistry(),
+): NodeJS.ProcessEnv {
   // A launch inside another Multi session starts from the user's own environment.
   const origin = withoutGateway(process.env);
   const env = translateTrafficPolicy({ ...origin });
-  delete env.OPENCODE_API_KEY;
+  for (const credential of new Set(
+    registry.list().flatMap(({ credentialEnv }) => credentialEnv ?? []),
+  )) {
+    delete env[credential];
+  }
   return {
     ...env,
     // What nested Claude runs get back in place of the gateway (see nested-env.ts).
@@ -1255,7 +1359,7 @@ function hasPluginDirectory(args: readonly string[]): boolean {
   return args.some((arg) => arg === '--plugin-dir' || arg.startsWith('--plugin-dir='));
 }
 
-function launcherArguments(
+export function launcherArguments(
   args: readonly string[],
   settingsFile: string,
   definitions: string,

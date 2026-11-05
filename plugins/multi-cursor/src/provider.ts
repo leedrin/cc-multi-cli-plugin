@@ -68,6 +68,7 @@ export const cursorProvider: ProviderDescriptor = {
   plugin: 'cursor',
   label: 'Cursor',
   kind: 'harness',
+  runs: 'native Cursor agent',
   autoReview: {
     review: 'harness',
     statement: 'Cursor reviews its own actions natively and fails open',

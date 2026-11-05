@@ -40,7 +40,7 @@
 
 - [x] 5.1 MP-0401：`registerBuiltinProviders()` 静态注册内置描述符；launcher 发现流程遍历 `registry.list()` 并过滤已启用插件；`native-launcher.test.ts` 通过
 - [x] 5.2 MP-0402：`GatewayOptions` 改为接收 `runtime`，删除 `zen`、`cursor`、`antigravity`、`grok`、`reviewers`、`displayTools`、`usageReaders`；`ProviderRuntime.close()` 沿用 `Closable`；`native-gateway*` 测试通过
-- [ ] 5.3 MP-0403：`WORKER_RUNS`、`direct`、`pickerSettings`、`gatewayEnvironment` 改为由 Registry 派生；每个 route provider 一个 worker；Agent 定义 ≤8000 的 `--agents` 预算测试通过
+- [x] 5.3 MP-0403：`WORKER_RUNS`、`direct`、`pickerSettings`、`gatewayEnvironment` 改为由 Registry 派生；每个 route provider 一个 worker；Agent 定义 ≤8000 的 `--agents` 预算测试通过
 - [x] 5.4 MP-0404：`gw/provider-usage.ts` 的 `UsageProvider`、`providers`、`unavailable` 改为表驱动；`native-provider-usage.test.ts` 断言不变
 - [x] 5.5 MP-0405：`.claude-plugin/marketplace.json` 与 `scripts/versioning.ts` 支持新增插件条目；`npm run check:versions` 通过
 - [ ] 5.6 第 1 组快照除明确允许的差异外不变；usage 相关既有测试断言未修改；`npm run check` 与 `npm run test:mod` 通过

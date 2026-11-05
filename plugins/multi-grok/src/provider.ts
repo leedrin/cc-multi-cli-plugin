@@ -49,6 +49,7 @@ export const grokProvider: ProviderDescriptor = {
   plugin: 'grok',
   label: 'Grok',
   kind: 'harness',
+  runs: 'native Grok Build CLI',
   autoReview: { review: 'none', statement: 'no auto mode: actions run unreviewed' },
   unavailableMessage: 'Grok is unavailable. Install Grok Build, run grok login, and relaunch.',
   worker: { type: 'multi-grok' },

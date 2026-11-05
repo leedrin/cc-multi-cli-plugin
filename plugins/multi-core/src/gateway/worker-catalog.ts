@@ -7,17 +7,10 @@
  */
 
 import { decodeModelRoute } from './model-identity.ts';
+import { PROVIDER_FACTS, type ProviderId } from './provider-facts.ts';
 
-const WORKER_PROVIDERS = ['openai', 'zen', 'cursor', 'antigravity', 'grok'] as const;
-export type WorkerProvider = (typeof WORKER_PROVIDERS)[number];
-
-const PROVIDER_LABELS: Readonly<Record<WorkerProvider, string>> = {
-  openai: 'OpenAI',
-  zen: 'Zen',
-  cursor: 'Cursor',
-  antigravity: 'Antigravity',
-  grok: 'Grok',
-};
+const WORKER_PROVIDERS: readonly ProviderId[] = PROVIDER_FACTS.map(({ id }) => id);
+export type WorkerProvider = ProviderId;
 
 /** Claude's model aliases: the Agent tool's own values, never a provider model. */
 const CLAUDE_ALIASES = new Set(['sonnet', 'opus', 'haiku', 'fable', 'inherit']);
@@ -57,12 +50,20 @@ export interface WorkerDefaults {
   effort?: string;
 }
 
+function providerFact(provider: WorkerProvider) {
+  const fact = PROVIDER_FACTS.find((candidate) => candidate.id === provider);
+  if (!fact) {
+    throw new Error(`Unknown worker provider ${provider}`);
+  }
+  return fact;
+}
+
 function workerType(provider: WorkerProvider): string {
-  return `multi-${provider}`;
+  return providerFact(provider).worker;
 }
 
 function providerLabel(provider: WorkerProvider): string {
-  return PROVIDER_LABELS[provider];
+  return providerFact(provider).label;
 }
 
 /** `multi/<provider>/<id>` decoded by the shared model-route codec. */
@@ -102,7 +103,7 @@ export function buildWorkerCatalog(
     catalog[workerType(provider)] = {
       type: workerType(provider),
       provider,
-      label: PROVIDER_LABELS[provider],
+      label: providerLabel(provider),
       models,
       defaultId: preferred && ids.includes(preferred) ? preferred : first.id,
       ...(effort ? { effort } : {}),

@@ -50,6 +50,7 @@ export const antigravityProvider: ProviderDescriptor = {
   plugin: 'antigravity',
   label: 'Antigravity',
   kind: 'harness',
+  runs: 'native Antigravity CLI',
   autoReview: { review: 'none', statement: 'no auto mode: actions run unreviewed' },
   unavailableMessage:
     'Antigravity is unavailable. Install and connect the multi-antigravity plugin.',

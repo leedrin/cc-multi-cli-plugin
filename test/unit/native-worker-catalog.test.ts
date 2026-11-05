@@ -121,14 +121,16 @@ test('worker routes preserve encoded nested ids and exclude Cursor presets', () 
   ]);
 });
 
-test('parseProviderModel accepts hyphenated providers without adding workers', () => {
+test('parseProviderModel accepts hyphenated providers and fact-table providers get a worker', () => {
   const model = 'multi/zai-coding-cn/org%2Fmodel%40v1';
   assert.deepEqual(parseProviderModel(model), {
     provider: 'zai-coding-cn',
     id: 'org/model@v1',
   });
   const workerCatalog = buildWorkerCatalog([{ model }]);
-  assert.deepEqual(Object.keys(workerCatalog), []);
+  assert.deepEqual(Object.keys(workerCatalog), ['multi-zai-coding-cn']);
+  assert.equal(workerCatalog['multi-zai-coding-cn'].label, 'Z.AI Coding (CN)');
+  assert.deepEqual(workerCatalog['multi-zai-coding-cn'].models, [{ id: 'org/model@v1', model }]);
 });
 
 test('effort is a separate provider-wide field, never a model name', () => {

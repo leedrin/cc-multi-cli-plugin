@@ -38,6 +38,7 @@ export const zenProvider: ProviderDescriptor = {
   plugin: 'zen',
   label: 'Zen',
   kind: 'direct',
+  credentialEnv: ['OPENCODE_API_KEY'],
   autoReview: { review: 'none', statement: 'no auto mode: actions run unreviewed' },
   unavailableMessage: zenUnavailable,
   worker: { type: 'multi-zen' },
