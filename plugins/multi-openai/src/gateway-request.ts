@@ -4,7 +4,7 @@ import type {
   PreparedRequest,
   ProviderRequestInput,
 } from '../../multi-core/src/gateway/provider-request.ts';
-import { ProviderAuthError } from '../../multi-core/src/gateway/provider-request.ts';
+import { httpUpstream, ProviderAuthError } from '../../multi-core/src/gateway/provider-request.ts';
 import {
   fromResponses,
   OPENAI_SIGNATURE_PREFIX,
@@ -75,7 +75,7 @@ export function prepareOpenAIRequest(
       effort: request.reasoning.effort,
     }),
     failureEvent: (status) => ({ route: 'openai', status }),
-    async send(signal: AbortSignal, fetchImpl: GatewayFetch) {
+    async open(signal: AbortSignal, fetchImpl: GatewayFetch) {
       toolNames = originalToolNames(body);
       const headers = {
         'content-type': 'application/json',
@@ -84,25 +84,28 @@ export function prepareOpenAIRequest(
         session_id: String(agentId ?? clientSession ?? fallbackSession),
       };
       try {
-        return await codexRequest(authFile, signal, (auth) =>
-          fetchImpl(OPENAI_URL, {
-            method: 'POST',
-            headers: { ...headers, ...auth },
-            body: JSON.stringify(request),
-            signal,
-            redirect: 'error',
-          }),
+        return await httpUpstream(
+          () =>
+            codexRequest(authFile, signal, (auth) =>
+              fetchImpl(OPENAI_URL, {
+                method: 'POST',
+                headers: { ...headers, ...auth },
+                body: JSON.stringify(request),
+                signal,
+                redirect: 'error',
+              }),
+            ),
+          (stream, emit, rememberWorkerModel) =>
+            fromResponses(stream, externalModel, emit, {
+              rememberWorkerModel,
+              toolNames: toolNames ?? originalToolNames(body),
+              stopSequences: body.stop_sequences,
+              inputTokens: inputTokens(),
+            }),
         );
       } catch (error) {
         throw error instanceof CodexAuthError ? new ProviderAuthError(error.message) : error;
       }
     },
-    translate: (stream, emit, rememberWorkerModel) =>
-      fromResponses(stream, externalModel, emit, {
-        rememberWorkerModel,
-        toolNames: toolNames ?? originalToolNames(body),
-        stopSequences: body.stop_sequences,
-        inputTokens: inputTokens(),
-      }),
   };
 }

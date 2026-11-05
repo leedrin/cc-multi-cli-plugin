@@ -577,7 +577,7 @@ export function createNativeGateway({
    * A hosted-API provider (OpenAI, Zen): the provider module prepares the request,
    * this owns keepalive, events, failure mapping and the reply.
    */
-  async function handleHosted(exchange: ProviderRequest, route: 'openai' | 'zen') {
+  async function handleDirect(exchange: ProviderRequest, route: 'openai' | 'zen') {
     const { res, body, url, signal, agentId, emit } = exchange;
     const prepared = prepareHosted(exchange, route);
     if (url.pathname === '/v1/messages/count_tokens') {
@@ -590,27 +590,22 @@ export function createNativeGateway({
     onEvent(prepared.requestEvent(agentId));
     exchange.keepAlive();
     const upstreamAbort = new AbortController();
-    const upstream = await prepared.send(
+    const upstream = await prepared.open(
       AbortSignal.any([signal, upstreamAbort.signal]),
       fetchImpl,
     );
     if (!upstream.ok) {
       // Do not print upstream bodies or credentials in gateway diagnostics.
       onEvent(prepared.failureEvent(upstream.status, agentId));
-      await upstream.body?.cancel();
       throw new UpstreamFailure(
         upstream.status,
-        upstream.headers.get('retry-after'),
+        upstream.retryAfter,
         prepared.label,
         prepared.authHelp,
       );
     }
-    if (!upstream.body) {
-      throw new Error(`${prepared.label} returned no response stream.`);
-    }
     exchange.startStream();
-    const result = await prepared.translate(
-      upstream.body,
+    const result = await upstream.translate(
       body.stream ? emit : undefined,
       workerModels.remember(exchange.identity.session),
     );
@@ -819,7 +814,7 @@ export function createNativeGateway({
     if (isHarnessProvider(route)) {
       return handleHarness(exchange, route);
     }
-    return handleHosted(exchange, route === 'zen' ? 'zen' : 'openai');
+    return handleDirect(exchange, route === 'zen' ? 'zen' : 'openai');
   }
   function handleMod(
     req: http.IncomingMessage,

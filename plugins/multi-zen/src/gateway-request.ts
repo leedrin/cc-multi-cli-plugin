@@ -4,6 +4,7 @@ import type {
   PreparedRequest,
   ProviderRequestInput,
 } from '../../multi-core/src/gateway/provider-request.ts';
+import { httpUpstream } from '../../multi-core/src/gateway/provider-request.ts';
 import { fromResponses } from '../../multi-core/src/gateway/responses.ts';
 import { originalToolNames } from '../../multi-core/src/gateway/tools.ts';
 import { fromChat, ZEN_SIGNATURE_PREFIXES } from './chat.ts';
@@ -44,31 +45,34 @@ export function prepareZenRequest(
     inputTokens: () => prepared.inputTokens,
     requestEvent: (agent) => ({ route: 'zen-request', agentId: agent, model: body.model }),
     failureEvent: (status, agent) => ({ route: 'zen', agentId: agent, status }),
-    send: (signal: AbortSignal, fetchImpl: GatewayFetch) =>
-      fetchImpl(`${ZEN_URL}/${prepared.endpoint}`, {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${apiKey}`,
-          'content-type': 'application/json',
-          accept: 'text/event-stream',
-          'x-opencode-session': cacheKey,
-          'x-opencode-client': 'cc-multi-cli-plugin',
+    open: (signal: AbortSignal, fetchImpl: GatewayFetch) =>
+      httpUpstream(
+        () =>
+          fetchImpl(`${ZEN_URL}/${prepared.endpoint}`, {
+            method: 'POST',
+            headers: {
+              authorization: `Bearer ${apiKey}`,
+              'content-type': 'application/json',
+              accept: 'text/event-stream',
+              'x-opencode-session': cacheKey,
+              'x-opencode-client': 'cc-multi-cli-plugin',
+            },
+            body: JSON.stringify(prepared.body),
+            signal,
+            redirect: 'error',
+          }),
+        (stream, emit, rememberWorkerModel) => {
+          const options = {
+            rememberWorkerModel,
+            toolNames: originalToolNames(body),
+            stopSequences: body.stop_sequences,
+            signaturePrefix: prepared.signaturePrefix,
+            requireUsage: true,
+            inputTokens: prepared.inputTokens,
+          };
+          const translate = prepared.endpoint === 'responses' ? fromResponses : fromChat;
+          return translate(stream, String(body.model), emit, options);
         },
-        body: JSON.stringify(prepared.body),
-        signal,
-        redirect: 'error',
-      }),
-    translate: (stream, emit, rememberWorkerModel) => {
-      const options = {
-        rememberWorkerModel,
-        toolNames: originalToolNames(body),
-        stopSequences: body.stop_sequences,
-        signaturePrefix: prepared.signaturePrefix,
-        requireUsage: true,
-        inputTokens: prepared.inputTokens,
-      };
-      const translate = prepared.endpoint === 'responses' ? fromResponses : fromChat;
-      return translate(stream, String(body.model), emit, options);
-    },
+      ),
   };
 }

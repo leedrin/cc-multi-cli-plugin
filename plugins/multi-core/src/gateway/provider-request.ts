@@ -94,11 +94,5 @@ export interface PreparedRequest {
   completion?: { model: string; effort?: string };
   requestEvent(agentId?: string): ProviderEvent;
   failureEvent(status: number, agentId?: string): ProviderEvent;
-  open?(signal: AbortSignal, fetchImpl: GatewayFetch): Promise<UpstreamOpen>;
-  send(signal: AbortSignal, fetchImpl: GatewayFetch): Promise<Response>;
-  translate(
-    stream: ReadableStream<Uint8Array>,
-    emit: Emit | undefined,
-    rememberWorkerModel?: RememberWorkerModel,
-  ): Promise<MessagesResponse>;
+  open(signal: AbortSignal, fetchImpl: GatewayFetch): Promise<UpstreamOpen>;
 }

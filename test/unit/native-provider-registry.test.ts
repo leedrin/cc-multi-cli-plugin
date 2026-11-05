@@ -18,16 +18,18 @@ function preparedRequest(): PreparedRequest {
     inputTokens: () => 0,
     requestEvent: () => ({ route: 'test' }),
     failureEvent: () => ({ route: 'test' }),
-    send: async () => new Response(),
-    translate: async () => ({
-      id: 'test',
-      type: 'message',
-      role: 'assistant',
-      model: 'test',
-      content: [],
-      stop_reason: 'end_turn',
-      stop_sequence: null,
-      usage: { input_tokens: 0, output_tokens: 0 },
+    open: async () => ({
+      ok: true,
+      translate: async () => ({
+        id: 'test',
+        type: 'message',
+        role: 'assistant',
+        model: 'test',
+        content: [],
+        stop_reason: 'end_turn',
+        stop_sequence: null,
+        usage: { input_tokens: 0, output_tokens: 0 },
+      }),
     }),
   };
 }
