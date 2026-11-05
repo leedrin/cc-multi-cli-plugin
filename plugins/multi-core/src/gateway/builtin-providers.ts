@@ -1,8 +1,8 @@
 import { antigravityProvider } from '../../../multi-antigravity/src/provider.ts';
 import { cursorProvider } from '../../../multi-cursor/src/provider.ts';
 import { grokProvider } from '../../../multi-grok/src/provider.ts';
-import { openaiProvider } from '../../../multi-openai/src/provider.ts';
-import { zenProvider } from '../../../multi-zen/src/provider.ts';
+import { bindOpenAIProvider, openaiProvider } from '../../../multi-openai/src/provider.ts';
+import { bindZenProvider, zenProvider } from '../../../multi-zen/src/provider.ts';
 import { type ProviderDescriptor, ProviderRegistry } from './provider-registry.ts';
 
 export const BUILTIN_PROVIDERS: readonly ProviderDescriptor[] = [
@@ -13,12 +13,30 @@ export const BUILTIN_PROVIDERS: readonly ProviderDescriptor[] = [
   grokProvider,
 ];
 
-export function registerBuiltinProviders(registry: ProviderRegistry): void {
-  registry.registerMany(BUILTIN_PROVIDERS);
+export interface BuiltinProviderCredentials {
+  authFile?: string;
+  zenKey?: string;
 }
 
-export function createBuiltinRegistry(): ProviderRegistry {
+export function registerBuiltinProviders(
+  registry: ProviderRegistry,
+  credentials: BuiltinProviderCredentials = {},
+): void {
+  registry.registerMany([
+    bindOpenAIProvider(
+      credentials.authFile === undefined ? {} : { authFile: credentials.authFile },
+    ),
+    bindZenProvider(credentials.zenKey === undefined ? {} : { apiKey: credentials.zenKey }),
+    cursorProvider,
+    antigravityProvider,
+    grokProvider,
+  ]);
+}
+
+export function createBuiltinRegistry(
+  credentials: BuiltinProviderCredentials = {},
+): ProviderRegistry {
   const registry = new ProviderRegistry();
-  registerBuiltinProviders(registry);
+  registerBuiltinProviders(registry, credentials);
   return registry;
 }

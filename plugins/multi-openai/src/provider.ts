@@ -51,7 +51,7 @@ export async function discoverOpenAI(
   let openaiReview = false;
   if (codexSignedIn) {
     try {
-      openaiReview = await reviewer(file);
+      openaiReview = await reviewer(file, undefined, { env: context.env });
     } catch {
       // A failed capability probe preserves inference and leaves auto mode unreviewed.
     }
@@ -61,6 +61,12 @@ export async function discoverOpenAI(
   }
   return { codexSignedIn, openaiReview };
 }
+
+export interface OpenAIProviderCredentials {
+  authFile?: string;
+}
+
+const defaultAuthFile = authFile(process.env);
 
 export const openaiProvider: ProviderDescriptor = {
   id: 'openai',
@@ -91,7 +97,19 @@ export const openaiProvider: ProviderDescriptor = {
   },
   direct: {
     signaturePrefixes: openaiSignaturePrefixes,
-    prepare: (input) =>
-      prepareOpenAIRequest(input, String(input.body.model), authFile(process.env)),
+    prepare: (input) => prepareOpenAIRequest(input, String(input.body.model), defaultAuthFile),
   },
 };
+
+export function bindOpenAIProvider({
+  authFile: boundAuthFile,
+}: OpenAIProviderCredentials): ProviderDescriptor {
+  return {
+    ...openaiProvider,
+    direct: {
+      signaturePrefixes: openaiSignaturePrefixes,
+      prepare: (input) =>
+        prepareOpenAIRequest(input, String(input.body.model), boundAuthFile ?? defaultAuthFile),
+    },
+  };
+}

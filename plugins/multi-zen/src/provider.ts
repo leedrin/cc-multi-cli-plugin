@@ -3,7 +3,7 @@ import type {
   ProviderDescriptor,
   ProviderDiscoveryContext,
 } from '../../multi-core/src/gateway/provider-registry.ts';
-import { readZenKey } from './auth.ts';
+import { readZenKey, validateZenKey } from './auth.ts';
 import { prepareZenRequest, zenSignaturePrefixes, zenUnavailable } from './gateway-request.ts';
 import { ZEN_MODELS } from './models.ts';
 
@@ -27,6 +27,10 @@ export async function discoverZen(
     return undefined;
   }
   return (deps.readKey ?? readZenKey)({ env: context.env });
+}
+
+export interface ZenProviderCredentials {
+  apiKey?: string;
 }
 
 export const zenProvider: ProviderDescriptor = {
@@ -66,6 +70,24 @@ export const zenProvider: ProviderDescriptor = {
   },
   direct: {
     signaturePrefixes: zenSignaturePrefixes,
-    prepare: (input) => prepareZenRequest(input, process.env.OPENCODE_API_KEY ?? ''),
+    prepare: () => {
+      throw new Error(zenUnavailable);
+    },
   },
 };
+
+export function bindZenProvider({ apiKey }: ZenProviderCredentials): ProviderDescriptor {
+  const validatedKey = apiKey === undefined ? undefined : validateZenKey(apiKey);
+  return {
+    ...zenProvider,
+    direct: {
+      signaturePrefixes: zenSignaturePrefixes,
+      prepare: (input) => {
+        if (!validatedKey) {
+          throw new Error(zenUnavailable);
+        }
+        return prepareZenRequest(input, validatedKey);
+      },
+    },
+  };
+}

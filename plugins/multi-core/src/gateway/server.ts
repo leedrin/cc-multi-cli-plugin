@@ -3,9 +3,6 @@ import type { Server } from 'node:http';
 import http from 'node:http';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { prepareOpenAIRequest } from '../../../multi-openai/src/gateway-request.ts';
-import { validateZenKey } from '../../../multi-zen/src/auth.ts';
-import { prepareZenRequest, zenUnavailable } from '../../../multi-zen/src/gateway-request.ts';
 import { setBounded } from './bounded.ts';
 import { createBuiltinRegistry } from './builtin-providers.ts';
 import {
@@ -131,7 +128,7 @@ export interface GatewayOptions {
   /** Where Claude's own traffic goes: Anthropic by default, or the caller's own base URL. */
   anthropicBaseUrl?: string;
   enabledProviders?: readonly string[];
-  authFile: string;
+  authFile?: string;
   fetchImpl?: GatewayFetch;
   onEvent?: (event: GatewayEvent) => void;
   timeoutMs?: number;
@@ -207,8 +204,19 @@ export function createNativeGateway({
   usageDashboard,
   billedUsage,
   usageReaders = {},
-  registry = createBuiltinRegistry(),
+  registry,
 }: GatewayOptions): Server {
+  let providerRegistry: ProviderRegistry;
+  if (registry) {
+    if (authFile !== undefined || zen?.apiKey !== undefined) {
+      throw new Error(
+        'Native gateway: pass credentials through the registry, not alongside it (credential ownership is ambiguous).',
+      );
+    }
+    providerRegistry = registry;
+  } else {
+    providerRegistry = createBuiltinRegistry({ authFile, zenKey: zen?.apiKey });
+  }
   const dashboard =
     usageDashboard ??
     new ProviderUsageDashboard({
@@ -237,9 +245,6 @@ export function createNativeGateway({
   };
   if (!token) {
     throw new Error('Gateway token required');
-  }
-  if (zen) {
-    validateZenKey(zen.apiKey);
   }
   const anthropicOrigin = parseAnthropicBase(anthropicBaseUrl);
   const anthropicUrl = (url: URL) => anthropicOrigin + url.pathname + url.search;
@@ -359,7 +364,7 @@ export function createNativeGateway({
         exchange,
         provider,
         new BadRequest(
-          registry.get(provider)?.unavailableMessage ?? 'Harness provider unavailable.',
+          providerRegistry.get(provider)?.unavailableMessage ?? 'Harness provider unavailable.',
         ),
       );
     }
@@ -620,8 +625,9 @@ export function createNativeGateway({
   }
   function prepareHosted(exchange: ProviderRequest, route: 'openai' | 'zen'): PreparedRequest {
     const { req, url, body, identity, agentId } = exchange;
-    if (route === 'zen' && !zen?.apiKey) {
-      throw new BadRequest(zenUnavailable);
+    const provider = providerRegistry.get(route);
+    if (!provider?.direct) {
+      throw new BadRequest(`Direct provider ${route} is not registered.`);
     }
     const input = {
       method: req.method,
@@ -633,9 +639,7 @@ export function createNativeGateway({
       agentId,
     };
     try {
-      return zen?.apiKey && route === 'zen'
-        ? prepareZenRequest(input, zen.apiKey)
-        : prepareOpenAIRequest(input, String(body.model), authFile);
+      return provider.direct.prepare(input);
     } catch (error) {
       throw new BadRequest(reason(error));
     }
@@ -643,7 +647,7 @@ export function createNativeGateway({
   async function handleAnthropic(exchange: ProviderRequest) {
     const { req, res, body, url, raw, signal } = exchange;
     const headers = anthropicHeaders(req);
-    const cleaned = forAnthropic(body, registry.signaturePrefixes());
+    const cleaned = forAnthropic(body, providerRegistry.signaturePrefixes());
     let forwarded: Buffer | undefined;
     if (req.method === 'POST') {
       forwarded = cleaned === body ? raw : Buffer.from(JSON.stringify(cleaned));
