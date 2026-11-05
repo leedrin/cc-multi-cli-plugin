@@ -61,7 +61,10 @@ import {
   type PluginPermissionInventory,
   pluginPermissions,
 } from './gateway/agent-definitions.ts';
-import { createBuiltinRegistry, registerBuiltinProviders } from './gateway/builtin-providers.ts';
+import {
+  type BuiltinProviderCredentials,
+  createBuiltinRegistry,
+} from './gateway/builtin-providers.ts';
 import { DISPLAY_TOOL_SERVER } from './gateway/display-rows.ts';
 import { executableInvocation, resolveExecutable } from './gateway/executable.ts';
 import {
@@ -71,14 +74,16 @@ import {
 } from './gateway/harness-settings.ts';
 import { ModBridge } from './gateway/mod-bridge.ts';
 import { PermissionModes } from './gateway/mode-hook.ts';
-import { decodeModelRoute } from './gateway/model-identity.ts';
+import { decodeModelRoute, encodeModelRoute } from './gateway/model-identity.ts';
 import { nestedClaudeShim, withPathPrefix } from './gateway/nested-env.ts';
 import { nativeSpelling } from './gateway/provider.ts';
 import { PROVIDER_FACTS, type ProviderId } from './gateway/provider-facts.ts';
 import {
   type ActiveProvider,
+  type ModelDescriptor,
+  type ProviderDescriptor,
   type ProviderDiscoveryContext,
-  ProviderRegistry,
+  type ProviderRegistry,
   ProviderRuntime,
 } from './gateway/provider-registry.ts';
 import type { ProviderUsageReader } from './gateway/provider-usage.ts';
@@ -108,9 +113,18 @@ const discoveryContext = (provider: string): ProviderDiscoveryContext => ({
 });
 const claudeExecutable = process.env.MULTI_REAL_CLAUDE;
 
-async function discoverLaunchProviders() {
-  const registry = new ProviderRegistry();
-  registerBuiltinProviders(registry);
+export type LaunchRegistryFactory = (credentials?: BuiltinProviderCredentials) => ProviderRegistry;
+
+/** One registration path shared by launcher discovery and runtime assembly. */
+export function createLaunchRegistry(credentials?: BuiltinProviderCredentials): ProviderRegistry {
+  return createBuiltinRegistry(credentials);
+}
+
+export async function discoverLaunchProviders(
+  registryFactory: LaunchRegistryFactory = createLaunchRegistry,
+  selectedProviderIds: readonly string[] | undefined = enabledProviderIds,
+) {
+  const registry = registryFactory();
   const discoveries = {
     openai: (context: ProviderDiscoveryContext) => discoverOpenAI(context),
     zen: (context: ProviderDiscoveryContext) => discoverZen(context),
@@ -121,7 +135,7 @@ async function discoverLaunchProviders() {
   };
   const discovered = await discoverEnabledProviders(
     registry,
-    enabledProviderIds,
+    selectedProviderIds,
     discoveries,
     discoveryContext,
   );
@@ -130,6 +144,16 @@ async function discoverLaunchProviders() {
   const antigravityModels = discovered.antigravity ?? [];
   const grokModels = discovered.grok ?? [];
   const zenKey = discovered.zen;
+  const genericModels: Record<string, readonly ModelDescriptor[]> = {};
+  for (const { id } of PROVIDER_FACTS) {
+    if (['openai', 'zen', 'cursor', 'antigravity', 'grok'].includes(id)) {
+      continue;
+    }
+    const models = (discovered as Record<string, unknown>)[id];
+    if (Array.isArray(models)) {
+      genericModels[id] = models as ModelDescriptor[];
+    }
+  }
   const availableProviderIds = PROVIDER_FACTS.filter(({ id }) => {
     if (!registry.get(id) || !Object.hasOwn(discovered, id)) {
       return false;
@@ -149,7 +173,7 @@ async function discoverLaunchProviders() {
     if (id === 'grok') {
       return grokModels.length > 0;
     }
-    return false;
+    return (genericModels[id]?.length ?? 0) > 0;
   }).map(({ id }) => id);
   return {
     codexSignedIn,
@@ -158,6 +182,7 @@ async function discoverLaunchProviders() {
     zenKey,
     antigravityModels,
     grokModels,
+    genericModels,
     availableProviderIds,
   };
 }
@@ -234,6 +259,7 @@ async function main() {
     zenKey,
     antigravityModels,
     grokModels,
+    genericModels,
     availableProviderIds,
   } = discovered;
   const cursorPicker = selectedCursorOptions(cursorModels, fullCatalog);
@@ -247,6 +273,7 @@ async function main() {
         grokModels,
         false,
         availableProviderIds,
+        genericModels,
       ).modelPicker.options.map((option) => option.model)
     : [];
   const settings = pickerSettings(
@@ -257,6 +284,7 @@ async function main() {
     grokModels,
     fullCatalog,
     availableProviderIds,
+    genericModels,
   );
   await mergeSettings(args, settings);
   // Agent view and background sessions are off for this session only, through the
@@ -304,6 +332,7 @@ async function main() {
     usageReaders,
     { cursor, antigravity, grok },
     reviewers.openai,
+    genericModels,
   );
   const receipts = new ReceiptLedger({
     file: process.env.MULTI_RECEIPTS_FILE
@@ -527,14 +556,16 @@ function providerUsageReaders(
   };
 }
 
-function launcherRuntime(
+export function launcherRuntime(
   authFile: string,
   zenKey: string | undefined,
   usageReaders: ReturnType<typeof providerUsageReaders>,
   harnesses: ReturnType<typeof nativeHarnesses>,
   reviewer: Awaited<ReturnType<typeof createOpenAIReviewer>> | undefined,
+  genericModels: Readonly<Record<string, readonly ModelDescriptor[]>> = {},
+  registryFactory: LaunchRegistryFactory = createLaunchRegistry,
 ): ProviderRuntime {
-  const registry = createBuiltinRegistry({ authFile, zenKey });
+  const registry = registryFactory({ authFile, zenKey });
   const active: ActiveProvider[] = [];
   const add = (id: string, provider: Omit<ActiveProvider, 'descriptor'>) => {
     const descriptor = registry.get(id);
@@ -558,7 +589,37 @@ function launcherRuntime(
       });
     }
   }
+  active.push(...genericRuntimeProviders(registry, genericModels));
   return new ProviderRuntime(active, { registry });
+}
+
+function genericRuntimeProviders(
+  registry: ProviderRegistry,
+  modelsByProvider: Readonly<Record<string, readonly ModelDescriptor[]>>,
+): ActiveProvider[] {
+  const dedicatedIds = ['openai', 'zen', 'cursor', 'antigravity', 'grok'];
+  const active: ActiveProvider[] = [];
+  for (const [id, models] of Object.entries(modelsByProvider)) {
+    if (models.length === 0 || dedicatedIds.includes(id)) {
+      continue;
+    }
+    const descriptor = registry.get(id);
+    if (!descriptor) {
+      throw new Error(`Missing provider descriptor for discovered provider: ${id}`);
+    }
+    active.push({ descriptor, models });
+  }
+  return active;
+}
+
+export function genericActiveProviders(
+  providers: readonly ProviderDescriptor[],
+  modelsByProvider: Readonly<Record<string, readonly ModelDescriptor[]>>,
+): ActiveProvider[] {
+  return providers.flatMap((descriptor) => {
+    const models = modelsByProvider[descriptor.id] ?? [];
+    return models.length > 0 ? [{ descriptor, models }] : [];
+  });
 }
 
 function recordValue(value: unknown): Record<string, unknown> | undefined {
@@ -1134,6 +1195,7 @@ export function pickerSettings(
   grokModels: GrokModel[],
   fullCatalog = false,
   availableProviderIds: readonly string[] = [],
+  genericModels: Readonly<Record<string, readonly ModelDescriptor[]>> = {},
 ): LaunchSettings {
   let zenOptions = zenPickerOptions('');
   if (zen) {
@@ -1195,6 +1257,26 @@ export function pickerSettings(
         description: `Zen API billing · Claude tools${efforts ? '' : ' · native reasoning; /effort not applicable'}`,
       })),
   };
+  const dedicatedProviders = new Set(['openai', 'cursor', 'antigravity', 'grok', 'zen']);
+  for (const fact of PROVIDER_FACTS) {
+    if (dedicatedProviders.has(fact.id)) {
+      continue;
+    }
+    builders[fact.id] = () => {
+      const models = genericModels[fact.id] ?? [];
+      if (models.length === 0) {
+        throw new Error(`Picker provider ${fact.id} has no row builder`);
+      }
+      return models.map((model) => ({
+        model: encodeModelRoute(model.identity.providerId, model.identity.modelId),
+        label: `${fact.label} · ${model.label}`,
+        description:
+          model.description ??
+          `${fact.label} · ${fact.kind === 'direct' ? 'Claude tools' : 'native harness'}`,
+        behavesAs: pickerProfile(Boolean(model.reasoning?.efforts?.length)),
+      }));
+    };
+  }
   for (const provider of availableProviderIds) {
     available.add(provider as ProviderId);
   }

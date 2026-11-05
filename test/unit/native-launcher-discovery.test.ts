@@ -77,12 +77,16 @@ test('Antigravity hook installs only for explicit selection with discovered mode
   }
 });
 
-test('launcher discovery rejects registry providers without typed discovery handlers', async () => {
-  const registry = { list: () => [{ id: 'unknown' }] };
-  await assert.rejects(
-    discoverEnabledProviders(registry, undefined, { openai: async () => undefined }, context),
-    /No launcher discovery handler for registered provider: unknown/,
-  );
+test('launcher discovery uses the registered descriptor when no typed handler exists', async () => {
+  const registry = {
+    list: () => [{ id: 'strata' }],
+    get: () => ({
+      availability: async () => ({ available: true }),
+      discoverModels: async () => [],
+    }),
+  };
+  const results = await discoverEnabledProviders(registry, undefined, {}, context);
+  assert.deepEqual(results, { strata: [] });
 });
 
 test('launcher discovery runs registered providers concurrently and preserves id association across orderings', async () => {
