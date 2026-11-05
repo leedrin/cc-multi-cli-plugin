@@ -10,6 +10,5 @@
     "plugins/multi-core/src/install/bootstrap.ts"
   ],
   "project": ["plugins/*/src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"],
-  "ignore": ["plugins/multi-core/hooks/**/*.ts"],
-  "ignoreDependencies": ["@earendil-works/pi-ai"]
+  "ignore": ["plugins/multi-core/hooks/**/*.ts"]
 }

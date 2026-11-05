@@ -5,6 +5,19 @@ import type {
 } from '../../multi-core/src/gateway/provider-registry.ts';
 import { filterPiModels, toPiModelDescriptors } from './catalog.ts';
 
+type PiBackendLoader = () => Promise<typeof import('./backend.ts')>;
+
+export async function discoverPiModels(
+  context: ProviderDiscoveryContext,
+  loadBackend: PiBackendLoader = () => import('./backend.ts'), // Fixed local import keeps the backend lazy without cwd-based resolution.
+) {
+  const apiKey = context.env.DEEPSEEK_API_KEY;
+  if (apiKey?.trim()) {
+    await loadBackend();
+  }
+  return toPiModelDescriptors(filterPiModels(context.env.MULTI_PI_MODELS));
+}
+
 const deepseekFact = PROVIDER_FACTS.find(({ id }) => id === 'deepseek');
 if (!deepseekFact) {
   throw new Error('DeepSeek provider facts are missing.');
@@ -25,7 +38,6 @@ export const deepseekDescriptor: ProviderDescriptor = {
     const apiKey = context.env.DEEPSEEK_API_KEY;
     return apiKey?.trim() ? { available: true } : { available: false, reason: deepseekUnavailable };
   },
-  discoverModels: async (context: ProviderDiscoveryContext) =>
-    toPiModelDescriptors(filterPiModels(context.env.MULTI_PI_MODELS)),
+  discoverModels: discoverPiModels,
   // The direct adapter is added in T032.
 };
