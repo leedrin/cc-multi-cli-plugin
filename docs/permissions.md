@@ -6,7 +6,7 @@ Claude Code's permission mode reaches every provider. Select it before the promp
 
 Claude Code's permission mode is the single control at prompt boundaries. Direct
 models retain Claude's permission checks; native harnesses translate supported
-modes and reject unsupported ones. Auto does not imply a reviewer exists. Zen, Antigravity and Grok have none:
+modes and reject unsupported ones. Auto does not imply a reviewer exists. Zen, DeepSeek, Antigravity and Grok have none:
 actions run unreviewed, and the status line says "no auto mode: actions run
 unreviewed". Cursor reviews its own native actions and fails open when its
 classifier is unavailable.
@@ -14,7 +14,7 @@ Plan restricts work to provider-supported plan capabilities. Bypass disables
 automatic review where supported while retaining explicit capability restrictions.
 Claude ask rules remain part of Claude's own tool permission checks.
 
-The mode snapshot applies at the next prompt. Direct Claude, OpenAI, and Zen
+The mode snapshot applies at the next prompt. Direct Claude, OpenAI, Zen, and DeepSeek
 workers record prompt identity and resolve tool permissions in Claude's loop.
 Cursor, Antigravity and Grok load the full settings-policy snapshot at their prompts,
 or lazily when a direct-model conversation requests a harness worker. Worker modes inherit or resolve from the parent
@@ -30,6 +30,7 @@ missing or unsupported mode fails explicitly.
 | --- | --- |
 | OpenAI direct models | Claude Code's Read, Grep, Glob, Bash, Edit, and Write tools run the tool loop. The originating OpenAI account reviews tool uses inline before the reply completes. Read-only tools on the core skip list need no review. Reviewer failure or timeout refuses the action; discovery failure at launch leaves Auto unreviewed, with that statement in the status line. |
 | Zen direct models | Claude Code runs and authorizes the tools. Zen auto mode is unreviewed like bypass; plan mode refuses actions that need review. Zen has no independent reviewer and never uses the OpenAI reviewer. |
+| DeepSeek direct models | Claude Code runs and authorizes the tools. DeepSeek Auto mode is unreviewed; Plan refuses actions that need review. DeepSeek has no independent reviewer and never uses the OpenAI reviewer. See [DeepSeek via Pi](pi.md). |
 | Cursor native harness | Native review belongs to the originating Cursor account and run. Cursor receives the prompt-boundary mode and capability restrictions. See [docs/cursor.md](cursor.md). |
 | Antigravity native harness | A namespaced global pre-tool hook enforces Claude's denials while the native CLI runs. See [docs/antigravity.md](antigravity.md). |
 | Grok native harness | Each run carries Claude's mode, a bounded native toolset and deny rules that outrank every mode; the announced toolset is checked against the policy. See [docs/grok.md](grok.md). |

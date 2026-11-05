@@ -12,6 +12,7 @@ results. Live provider checks need a real login on the host and are run by hand.
 | OpenAI | Inference, reviewer, manual/repeated compaction and resume; automatic compaction still pending | Reviewer and earlier approval-transport probes (since retired); broader mode/compaction reruns pending | No recorded run in this guide |
 | Cursor SDK | Tools, continuation and disk resume | Native harness check | No recorded run in this guide |
 | OpenCode Zen | Tools/cache/resume, including revalidation of saved traces | Live rerun pending | No recorded run in this guide |
+| DeepSeek via Pi | No recorded live run in this guide | No recorded live run in this guide | No recorded run in this guide |
 | Antigravity | Native harness check | Native harness check from an interactive desktop login | No recorded run in this guide |
 | Grok | No recorded live run in this guide | Native harness reported; exact test/version evidence not recorded here | No recorded run in this guide |
 
@@ -50,6 +51,7 @@ Run from a fresh checkout after `npm ci`.
 | --- | --- | --- |
 | `npm run test:live:compaction` | Claude/OpenAI compaction, edits, and resume | Claude and Codex login |
 | `npm run test:live:zen` | Zen tools, cache usage, and resume | `OPENCODE_API_KEY` or OpenCode `/connect` |
+| `npm run test:live:pi` | DeepSeek tools, thinking round-trip, and usage (≤10 upstream calls) | `DEEPSEEK_API_KEY` |
 | `npm run test:live:cursor` | Cursor tools, continuation, disk resume, non-Fast execution | Cursor SDK login and `--cursor-login` |
 | `npm run test:live:auto-mode` | OpenAI Auto review and routing | Claude and Codex login |
 | `npm run test:live:reviewer` | OpenAI review allow/deny behavior | Codex login |

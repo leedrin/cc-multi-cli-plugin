@@ -3,7 +3,7 @@
 See [AGENTS.md](AGENTS.md) for contributor rules and [README.md](README.md) for
 usage. Provider setup and limits are documented in [docs/installation.md](docs/installation.md),
 [docs/openai.md](docs/openai.md), [docs/cursor.md](docs/cursor.md),
-[docs/zen.md](docs/zen.md), [docs/antigravity.md](docs/antigravity.md), [docs/grok.md](docs/grok.md),
+[docs/zen.md](docs/zen.md), [docs/pi.md](docs/pi.md), [docs/antigravity.md](docs/antigravity.md), [docs/grok.md](docs/grok.md),
 [docs/permissions.md](docs/permissions.md), and [docs/platform-support.md](docs/platform-support.md).
 
 ## Overview
@@ -30,9 +30,9 @@ Claude Code session (/model, workers, prompts)
                   |
              Node gateway
         /          |           \
-   OpenAI       Zen       Cursor / Antigravity / Grok
- direct API   direct API   SDK or real CLI
- Claude loop  Claude loop  provider loop
+   OpenAI       Zen / DeepSeek       Cursor / Antigravity / Grok
+ direct API   direct API (Pi for DeepSeek)   SDK or real CLI
+ Claude loop  Claude loop            provider loop
 ```
 
 ## Provider structure
@@ -43,7 +43,7 @@ kind, worker type, and label. Hooks and installation can use these facts without
 importing provider implementations. Model routes are encoded and decoded by
 `gateway/model-identity.ts`. Provider implementations live in each plugin's
 `src/provider.ts`: they export a typed descriptor and discovery function
-(`discoverOpenAI`, `discoverZen`, `discoverCursor`, `discoverAntigravity`, or
+(`discoverOpenAI`, `discoverZen`, `discoverPiModels`, `discoverCursor`, `discoverAntigravity`, or
 `discoverGrok`) with provider-specific discovery dependencies injectable where
 supported. Provider adapters and harnesses stay in their owning plugin; the
 shared fact table and registry types do not import those implementation modules.
@@ -71,13 +71,13 @@ Launcher iteration over `registry.list()` for discovery and activation is planne
 
 ### Direct execution
 
-OpenAI and Zen are declared as direct providers with `DirectProviderAdapter` values containing `signaturePrefixes` and `prepare` (`plugins/multi-openai/src/provider.ts:71-102`, `plugins/multi-zen/src/provider.ts:36-77`, and the adapter contract in `plugins/multi-core/src/gateway/provider-registry.ts:66-81`).
+OpenAI, Zen, and DeepSeek are declared as direct providers with `DirectProviderAdapter` values containing `signaturePrefixes` and `prepare` (`plugins/multi-openai/src/provider.ts:71-102`, `plugins/multi-zen/src/provider.ts:36-77`, `plugins/multi-pi/src/provider.ts:31-51`, and the adapter contract in `plugins/multi-core/src/gateway/provider-registry.ts:66-81`). DeepSeek uses Pi's lazily loaded DeepSeek backend; its model catalog and Direct request preparation stay in `plugins/multi-pi/`.
 
 Each `prepare` call creates a `PreparedRequest`; its `open(signal, fetchImpl)` method is the single operation that opens the upstream request (`plugins/multi-core/src/gateway/provider-request.ts:83-98`, `plugins/multi-openai/src/gateway-request.ts:64-110`, and `plugins/multi-zen/src/gateway-request.ts:40-77`).
 
 The static descriptors' `prepare` functions do not read `process.env` per request; OpenAI computes its default auth-file path once at module load from `process.env` and closes over `defaultAuthFile` (`plugins/multi-openai/src/provider.ts:13-14,69-101`).
 
-The unbound Zen static descriptor's `prepare` always throws the original `zenUnavailable` message, while bound descriptors use credentials supplied when binding (`plugins/multi-zen/src/provider.ts:71-93`).
+The unbound Zen static descriptor's `prepare` always throws the original `zenUnavailable` message, while bound descriptors use credentials supplied when binding (`plugins/multi-zen/src/provider.ts:71-93`). DeepSeek likewise binds its environment-sourced credential into the provider descriptor; discovery loads the Pi backend only when that credential is present (`plugins/multi-pi/src/provider.ts:13-22,57-70`).
 
 `createBuiltinRegistry` passes `authFile` and `zenKey` into `registerBuiltinProviders`, which binds OpenAI and Zen through `bindOpenAIProvider` and `bindZenProvider` (`plugins/multi-core/src/gateway/builtin-providers.ts:16-42`).
 
@@ -119,7 +119,7 @@ elapsed time, streamed progress, completion, failure, and cancellation.
 ## Worker types
 
 The Agent tool offers exactly one type per signed-in or enabled provider:
-`multi-openai`, `multi-zen`, `multi-cursor`, `multi-antigravity`, and
+`multi-openai`, `multi-zen`, `multi-deepseek`, `multi-cursor`, `multi-antigravity`, and
 `multi-grok`. A type's models are exactly that provider's rows in the session's
 `/model` picker, so `--models`, `MULTI_MODELS`, and the provider-specific
 `_EXTRA_MODELS`/`_MODELS` environment variables bound them. The Agent tool's
@@ -143,15 +143,16 @@ the session's `/effort`, validated by the provider.
 | --- | --- | --- | --- | --- |
 | OpenAI | Claude Code tools and loop | OpenAI account reviewer | Gateway and provider reasoning state | Codex login |
 | Zen | Claude Code tools and loop | No reviewer; Auto runs unreviewed | Gateway and Zen reasoning/cache state | Zen API key |
+| DeepSeek | Claude Code tools and loop; Pi-backed Direct API | No reviewer; Auto runs unreviewed | Gateway and Pi translation state | `DEEPSEEK_API_KEY` |
 | Cursor | Cursor SDK loop | Cursor native review | Cursor SDK, scoped by run | Cursor SDK login |
 | Antigravity | `agy` CLI loop | No reviewer | Antigravity native history and cache | `agy` login |
 | Grok | `grok` CLI loop | No reviewer | Grok native sessions on disk | Grok Build account login |
 
-OpenAI and Zen are direct model integrations. Their worker hooks record prompt
+OpenAI, Zen, and DeepSeek are direct model integrations. Their worker hooks record prompt
 identity and let Claude Code run the tool loop. Full settings translation runs
 at Cursor, Antigravity, and Grok prompts, or when a direct-model conversation requests
 a harness worker. OpenAI
-review stays with the originating OpenAI account. Zen never borrows Codex
+review stays with the originating OpenAI account. Zen and DeepSeek never borrow Codex
 review. If discovery cannot find the OpenAI reviewer at launch, Auto runs OpenAI
 unreviewed and the status line says so. A discovered reviewer failing on a call
 refuses that action with an evaluated verdict.

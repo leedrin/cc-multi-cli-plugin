@@ -6,6 +6,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for current direction and
 
 ## Unreleased
 
+- Document DeepSeek setup, model selection, execution limits, and measured Pi dependency disk use in [docs/pi.md](docs/pi.md).
+
 - **Isolate provider keys during startup probing.** Claude plugin-list probes no longer receive provider API keys in their child-process environment.
 
 - **Use DeepSeek through Pi.** DeepSeek is available as a direct provider through the curated Pi catalog, with local token estimates and canonical upstream usage.

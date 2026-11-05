@@ -12,7 +12,7 @@
 [![Linux · macOS · Windows](https://img.shields.io/badge/platforms-Linux_%C2%B7_macOS_%C2%B7_Windows-555)](docs/platform-support.md)
 [![Stars](https://img.shields.io/github/stars/greenpolo/cc-multi-cli-plugin?style=social)](https://github.com/greenpolo/cc-multi-cli-plugin/stargazers)
 
-Multi brings external models and coding harnesses into one Claude Code session through the `/model` picker and provider workers started from the Agent tool, with each provider's own login and permissions. Providers are OpenAI (ChatGPT via Codex login), Cursor (official SDK), OpenCode Zen (API key), Antigravity (official CLI), and Grok (official Grok Build CLI).
+Multi brings external models and coding harnesses into one Claude Code session through the `/model` picker and provider workers started from the Agent tool, with each provider's own login and permissions. Providers are OpenAI (ChatGPT via Codex login), Cursor (official SDK), OpenCode Zen (API key), DeepSeek (API key via Pi), Antigravity (official CLI), and Grok (official Grok Build CLI).
 
 [Quick start](#install) · [Providers](#providers) · [Documentation](#documentation) · [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
 
@@ -23,7 +23,7 @@ Multi brings external models and coding harnesses into one Claude Code session t
 ## Why Multi?
 
 - **Choose your model in place.** Switch through `/model` and select supported reasoning effort with `/effort`.
-- **Delegate to provider workers.** Run a provider's own model from the Agent tool (`multi-openai`, `multi-cursor`, `multi-zen`, `multi-antigravity`, `multi-grok`); native actions appear as tool rows under the harness's own tool names, with elapsed time and cancellation.
+- **Delegate to provider workers.** Run a provider's own model from the Agent tool (`multi-openai`, `multi-cursor`, `multi-zen`, `multi-deepseek`, `multi-antigravity`, `multi-grok`); native actions appear as tool rows under the harness's own tool names, with elapsed time and cancellation.
 - **Keep native execution.** OpenAI and Zen use Claude Code's tools; Cursor, Antigravity and Grok run their own SDK or CLI tools.
 - **Carry your session forward.** Resume saved sessions while keeping provider credentials and native state separate.
 - **Stay in control.** Claude's permission mode and explicit tool restrictions govern provider dispatch.
@@ -34,6 +34,7 @@ In Claude Code, add the marketplace and install the providers you want:
 
 ```text
 /plugin marketplace add leedrin/cc-multi-cli-plugin
+/plugin install multi-pi@cc-multi-cli-plugin
 /plugin install multi-openai@cc-multi-cli-plugin
 /plugin install multi-cursor@cc-multi-cli-plugin
 /plugin install multi-zen@cc-multi-cli-plugin
@@ -52,6 +53,7 @@ Install any subset; each provider pulls in the shared `multi-core` plugin. Open 
 | `multi-openai` | `/multi-openai:login` | [ChatGPT models through Codex](docs/openai.md) |
 | `multi-cursor` | `/multi-cursor:login` | [Official Cursor SDK models and workers](docs/cursor.md) |
 | `multi-zen` | `/multi-zen:connect` | [OpenCode Zen models with an API key](docs/zen.md) |
+| `multi-pi` | Environment setup | [DeepSeek models via Pi](docs/pi.md) |
 | `multi-antigravity` | `/multi-antigravity:connect` | [Antigravity models and workers through `agy`](docs/antigravity.md) |
 | `multi-grok` | `/multi-grok:login` | [Grok models and workers through Grok Build](docs/grok.md) |
 
@@ -86,7 +88,7 @@ Linux, macOS, and Windows have platform-specific implementations and a CI matrix
 | [Installation and account setup](docs/installation.md) | [Permissions and review](docs/permissions.md) |
 | [OpenAI](docs/openai.md) · [Cursor](docs/cursor.md) | [Architecture and execution flow](ARCHITECTURE.md) |
 | [Claude Mods reference](docs/claude-mods.md) | Required integration boundary for Claude Code UI and extensibility |
-| [OpenCode Zen](docs/zen.md) · [Antigravity](docs/antigravity.md) · [Grok](docs/grok.md) | [Platform support and verification](docs/platform-support.md) |
+| [OpenCode Zen](docs/zen.md) · [DeepSeek via Pi](docs/pi.md) · [Antigravity](docs/antigravity.md) · [Grok](docs/grok.md) | [Platform support and verification](docs/platform-support.md) |
 
 <details>
 <summary>Does this change my normal Claude setup?</summary>
