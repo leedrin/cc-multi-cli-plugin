@@ -24,7 +24,7 @@
 - [x] 3.1 MP-0201：新增 host-free 的 `gw/provider-facts.ts`（`PROVIDER_FACTS`），`hooks/provider.ts` 与 `gw/provider-workers.ts` 改为读取它；断言 `hooks/` 不 import `src/` 的宿主模块，`npm run test:mod` 通过
 - [x] 3.2 MP-0202：新增 `gw/provider-registry.ts`（`ProviderDescriptor`、注册校验、`ProviderRuntime`）；新增 `test/unit/native-provider-registry.test.ts` 覆盖重复 ID、非法 ID、保留 ID、kind 与 adapter 不匹配报错，事实表与描述符一致，构建 < 100 ms
 - [x] 3.3 MP-0203：OpenAI、Zen、Cursor、Antigravity、Grok 各在 `src/provider.ts` 提供描述符（auto-review 策略、签名前缀、worker 信息）；`gw/provider.ts` 的 `PROVIDERS`、`PROVIDER_AUTO_REVIEW` 和 `gw/server.ts:76` 的 `FOREIGN_SIGNATURE_PREFIXES` 改由 Registry 汇总；`native-verdicts`、`native-reviewer-discovery` 测试断言不变
-- [ ] 3.4 fake provider 测试：只加一个描述符和一行事实，就出现在 picker、worker 和 usage 中，且未修改 gateway 核心文件
+- [x] 3.4 fake provider 测试：只加一个描述符和一行事实，就出现在 picker、worker 和 usage 中，且未修改 gateway 核心文件
 - [x] 3.5 插件启用按插件 ID 判断（`core/install/plugins.ts`、`core/install/bootstrap.ts`、`core/account.ts:66`）；扩展 `native-install.test.ts`
 - [x] 3.6 更新 `AGENTS.md` 代码地图（`provider-facts.ts`、`provider-registry.ts`、`model-identity.ts`）与 `ARCHITECTURE.md` 的 provider 结构；`npm run check` 通过
 
