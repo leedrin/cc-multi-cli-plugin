@@ -77,6 +77,7 @@ import { PermissionModes } from './gateway/mode-hook.ts';
 import { decodeModelRoute, encodeModelRoute } from './gateway/model-identity.ts';
 import { nestedClaudeShim, withPathPrefix } from './gateway/nested-env.ts';
 import { nativeSpelling } from './gateway/provider.ts';
+import { takeProviderCredentials } from './gateway/provider-credentials.ts';
 import { PROVIDER_FACTS, type ProviderId } from './gateway/provider-facts.ts';
 import {
   type ActiveProvider,
@@ -105,12 +106,27 @@ import {
 
 const enabledProviders = providerSelection(process.env.MULTI_ENABLED_PROVIDERS);
 const enabledProviderIds: readonly string[] | undefined = enabledProviders;
-const discoveryContext = (provider: string): ProviderDiscoveryContext => ({
-  cwd: process.cwd(),
-  env: process.env,
-  explicit: providerExplicit(provider, enabledProviderIds),
-  log: (message: string) => console.error(message),
-});
+const discoveryContext = (
+  provider: string,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+  credentials: ReadonlyMap<string, string> = new Map(),
+  descriptor: ProviderDescriptor | undefined = undefined,
+  selectedProviderIds: readonly string[] | undefined = enabledProviderIds,
+): ProviderDiscoveryContext => {
+  const env = { ...baseEnv };
+  for (const name of descriptor?.credentialEnv ?? []) {
+    const value = credentials.get(name);
+    if (value !== undefined) {
+      env[name] = value;
+    }
+  }
+  return {
+    cwd: process.cwd(),
+    env,
+    explicit: providerExplicit(provider, selectedProviderIds),
+    log: (message: string) => console.error(message),
+  };
+};
 const claudeExecutable = process.env.MULTI_REAL_CLAUDE;
 
 export type LaunchRegistryFactory = (credentials?: BuiltinProviderCredentials) => ProviderRegistry;
@@ -123,8 +139,22 @@ export function createLaunchRegistry(credentials?: BuiltinProviderCredentials): 
 export async function discoverLaunchProviders(
   registryFactory: LaunchRegistryFactory = createLaunchRegistry,
   selectedProviderIds: readonly string[] | undefined = enabledProviderIds,
+  options: {
+    env?: NodeJS.ProcessEnv;
+    platform?: NodeJS.Platform;
+    credentials?: ReadonlyMap<string, string>;
+  } = {},
 ) {
   const registry = registryFactory();
+  const env = options.env ?? process.env;
+  const enabledDescriptors = registry
+    .list()
+    .filter(({ id }) => selectedProviderIds === undefined || selectedProviderIds.includes(id));
+  const credentials =
+    options.credentials ??
+    takeProviderCredentials(env, enabledDescriptors, {
+      platform: options.platform,
+    });
   const discoveries = {
     openai: (context: ProviderDiscoveryContext) => discoverOpenAI(context),
     zen: (context: ProviderDiscoveryContext) => discoverZen(context),
@@ -137,7 +167,8 @@ export async function discoverLaunchProviders(
     registry,
     selectedProviderIds,
     discoveries,
-    discoveryContext,
+    (provider) =>
+      discoveryContext(provider, env, credentials, registry.get(provider), selectedProviderIds),
   );
   const codexSignedIn = discovered.openai?.codexSignedIn ?? false;
   const cursorModels = discovered.cursor?.cursorModels ?? [];
@@ -226,32 +257,113 @@ interface LaunchSettings {
   [key: string]: unknown;
 }
 
-async function main() {
-  const args = process.argv.slice(2);
-  await handleCommand(args[0]);
+interface LauncherMainHooks {
+  command?: (command: string | undefined) => Promise<boolean>;
+  versionProbe?: () => Promise<void>;
+  pluginInventory?: (cwd: string, args: readonly string[]) => Promise<PluginPermissionInventory>;
+  anthropicAuth?: () => Promise<boolean>;
+  discovery?: typeof discoverLaunchProviders;
+  afterProbes?: () => boolean;
+}
+
+interface LauncherMainOptions {
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  args?: string[];
+  hooks?: LauncherMainHooks;
+}
+
+async function runLauncherCommand(
+  command: string | undefined,
+  hooks: LauncherMainHooks | undefined,
+): Promise<boolean> {
+  if (hooks?.command) {
+    return hooks.command(command);
+  }
+  await handleCommand(command);
+  return false;
+}
+
+async function runLauncherProbes(options: {
+  args: readonly string[];
+  credentials: ReadonlyMap<string, string>;
+  env: NodeJS.ProcessEnv;
+  hooks: LauncherMainHooks | undefined;
+  platform: NodeJS.Platform;
+  selectedProviders: readonly string[] | undefined;
+}) {
+  const { args, credentials, env, hooks, platform, selectedProviders } = options;
+  await (hooks?.versionProbe ?? assertFunctionHooksSupported)();
+  const [pluginInventory, anthropic, discovered] = await Promise.all([
+    (hooks?.pluginInventory ?? pluginInventoryOrEmpty)(process.cwd(), args),
+    (hooks?.anthropicAuth ?? anthropicSignedIn)(),
+    (hooks?.discovery ?? discoverLaunchProviders)(createLaunchRegistry, selectedProviders, {
+      env,
+      platform,
+      credentials,
+    }),
+  ]);
+  return { pluginInventory, anthropic, discovered };
+}
+
+function shouldStopAfterProbes(hooks: LauncherMainHooks | undefined): boolean {
+  return hooks?.afterProbes?.() ?? false;
+}
+
+async function handleEarlyLauncherCommand(
+  args: string[],
+  hooks: LauncherMainHooks | undefined,
+): Promise<boolean> {
+  if (await runLauncherCommand(args[0], hooks)) {
+    return true;
+  }
   if (args[0] === '--cursor-models') {
     const { cursorModels, cursorSignedIn } = await discoverCursor(discoveryContext('cursor'), true);
     printCursorModels(cursorModels, cursorSignedIn);
-    return;
+    return true;
   }
+  return false;
+}
+
+function normalizeLauncherArgs(args: string[]): void {
   if (args[0] === '--') {
     args.shift();
   }
   validateSessionLaunch(args);
+}
+
+export async function main(options: LauncherMainOptions = {}): Promise<void> {
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const args = options.args ?? process.argv.slice(2);
+  const hooks = options.hooks;
+  const selectedProviders: readonly string[] | undefined = providerSelection(
+    env.MULTI_ENABLED_PROVIDERS,
+  );
+  const credentialRegistry = createLaunchRegistry();
+  const credentialDescriptors = credentialRegistry
+    .list()
+    .filter(({ id }) => selectedProviders === undefined || selectedProviders.includes(id));
+  const credentials = takeProviderCredentials(env, credentialDescriptors, { platform });
+  if (await handleEarlyLauncherCommand(args, hooks)) {
+    return;
+  }
+  normalizeLauncherArgs(args);
   warnIfProxyUnused();
   const pluginRoot = await findPluginRoot(fileURLToPath(import.meta.url));
-  await assertFunctionHooksSupported();
-  const fullCatalog = process.env.MULTI_MODELS !== undefined;
-  const authFile = path.join(
-    process.env.CODEX_HOME || path.join(os.homedir(), '.codex'),
-    'auth.json',
-  );
-  // Independent probes run together: Cursor's model listing alone can take 15 s.
-  const [pluginInventory, anthropic, discovered] = await Promise.all([
-    pluginInventoryOrEmpty(process.cwd(), args),
-    anthropicSignedIn(),
-    discoverLaunchProviders(),
-  ]);
+  const fullCatalog = env.MULTI_MODELS !== undefined;
+  const authFile = path.join(env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'auth.json');
+  const { pluginInventory, anthropic, discovered } = await runLauncherProbes({
+    args,
+    credentials,
+    env,
+    hooks,
+    platform,
+    selectedProviders,
+  });
+  if (shouldStopAfterProbes(hooks)) {
+    return;
+  }
   const {
     codexSignedIn,
     openaiReview,
@@ -427,17 +539,23 @@ async function main() {
   });
   await awaitStartOrExit(modStart, exited, child, shutdown);
   void exited.then((code) => shutdown().finally(() => process.exit(code)));
-  if (process.platform === 'win32') {
+  registerShutdownSignals(child, process.platform);
+}
+
+function registerShutdownSignals(
+  child: { kill: (signal: NodeJS.Signals) => boolean },
+  platform: NodeJS.Platform,
+): void {
+  process.on('SIGTERM', () => child.kill('SIGTERM'));
+  if (platform === 'win32') {
     // Windows console control events do not provide POSIX process groups. Claude's
     // child owns Ctrl+C handling; forward termination explicitly to its process tree.
-    process.on('SIGTERM', () => child.kill('SIGTERM'));
     process.on('SIGINT', () => {});
-  } else {
-    process.on('SIGTERM', () => child.kill('SIGTERM'));
-    // Unix foreground terminals deliver SIGINT to both processes; Claude owns its
-    // interrupt UI, so the gateway deliberately remains alive.
-    process.on('SIGINT', () => {});
+    return;
   }
+  // Unix foreground terminals deliver SIGINT to both processes; Claude owns its
+  // interrupt UI, so the gateway deliberately remains alive.
+  process.on('SIGINT', () => {});
 }
 
 /**

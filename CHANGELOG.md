@@ -6,6 +6,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for current direction and
 
 ## Unreleased
 
+- **Keep enabled provider API keys out of child processes.** Multi now removes enabled providers' credential environment variables from its process environment before provider discovery and passes each key only to its owning provider. With Zen enabled, `OPENCODE_API_KEY` is also withheld from child processes.
+
 - **BREAKING: Unknown `multi/<provider>/` models are rejected.** These models used
   to be silently sent to OpenAI; the gateway now returns HTTP 400 BadRequest and
   does not call an upstream when the provider is unknown.

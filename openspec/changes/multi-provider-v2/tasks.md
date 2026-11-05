@@ -48,7 +48,7 @@
 ## 6. P5a multi-pi 插件与 DeepSeek（MP-0601–0604、0606、DD §9–§13）
 
 - [x] 6.1 MP-0601：在根 `package.json` 精确 pin `@earendil-works/pi-ai@1.4.0`；新建 `plugins/multi-pi/`（插件清单、`src/provider.ts` 描述符，不 import `pi-ai`）；`npm ci` 与 `npm run check:versions` 通过
-- [ ] 6.2 MP-0606：`gw/` 新增 `takeProviderCredentials(env, descriptors)`，接受显式 `platform`；在创建子进程之前调用并删除 `process.env` 上的条目；单测覆盖只读环境变量、读取后删除、未启用时不删除、不访问 `~/.pi`、Windows 分支
+- [x] 6.2 MP-0606：`gw/` 新增 `takeProviderCredentials(env, descriptors)`，接受显式 `platform`；在创建子进程之前调用并删除 `process.env` 上的条目；单测覆盖只读环境变量、读取后删除、未启用时不删除、不访问 `~/.pi`、Windows 分支
 - [x] 6.3 `src/catalog.ts`：首批 DeepSeek 模型的严格白名单，只放行 `openai-completions`；`MULTI_PI_MODELS` 含白名单外 ID 时报错；支持的 effort 与默认 effort（null 级别、缺失键就近映射到支持档位，按 low < medium < high < xhigh < max、等距取高，响应提示一次实际档位；缺省 `high`，`thinking: disabled`）；单测通过
 - [ ] 6.4 `src/backend.ts`：懒加载（代码旁注明 AGENTS.md 直接 import 规则的例外理由），只 import `providers/deepseek`；显式 `cacheRetention: 'short'`、`maxRetries: 0`、`redirect: 'error'`、单一上游主机；`open` 等待首个事件。单测：无 key 启动未 import `pi-ai`，`PI_CACHE_RETENTION=long` 时请求字节不变
 - [ ] 6.5 MP-0602：`src/messages.ts` 与 `src/signature.ts`：请求转换（DD §12.3 每行）、`max_tokens` 范围、`tool_choice`、工具名别名复用 `gw/tools.ts`、`multipi:v1:` 签名往返与相邻 thinking 合并、BadRequest 路径、字节稳定；单测覆盖 spec `pi-message-translation` 的请求侧场景

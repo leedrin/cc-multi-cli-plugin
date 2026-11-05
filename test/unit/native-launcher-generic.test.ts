@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import { createBuiltinRegistry } from '../../plugins/multi-core/src/gateway/builtin-providers.ts';
 import type {
@@ -11,9 +14,11 @@ import {
   discoverLaunchProviders,
   genericActiveProviders,
   launcherRuntime,
+  main,
   pickerSettings,
 } from '../../plugins/multi-core/src/launcher.ts';
 import { discoverEnabledProviders } from '../../plugins/multi-core/src/provider-discovery.ts';
+import { removeTemporary } from '../temporary.ts';
 
 function context(
   explicit: boolean,
@@ -127,6 +132,147 @@ test('generic discovered models are activated in ProviderRuntime', () => {
   assert.deepEqual(
     runtime.active().map(({ descriptor: provider, models }) => [provider.id, models]),
     [['strata', [model]]],
+  );
+});
+
+test('launcher takes enabled credentials before discovery and isolates each provider context', async () => {
+  const seen: Record<string, NodeJS.ProcessEnv> = {};
+  const make = (id: 'deepseek' | 'strata', credential: string): ProviderDescriptor => ({
+    id,
+    plugin: 'pi',
+    label: id,
+    kind: 'direct',
+    credentialEnv: [credential],
+    autoReview: { review: 'none', statement: 'No reviewer' },
+    direct: {
+      prepare: () => {
+        throw new Error('not invoked');
+      },
+      signaturePrefixes: [],
+    },
+    availability: async (context) => {
+      assert.equal(env[credential], undefined, 'host environment is scrubbed before discovery');
+      seen[id] = context.env;
+      return { available: true };
+    },
+    discoverModels: async () => [],
+    unavailableMessage: `${id} unavailable`,
+  });
+  const deepseek = make('deepseek', 'DEEPSEEK_API_KEY');
+  const strata = make('strata', 'STRATA_API_KEY');
+  const registryFactory = () => {
+    const registry = createBuiltinRegistry();
+    registry.register(deepseek);
+    registry.register(strata);
+    return registry;
+  };
+  const env: NodeJS.ProcessEnv = {
+    DEEPSEEK_API_KEY: 'deepseek-secret',
+    STRATA_API_KEY: 'strata-secret',
+    KEEP: 'visible',
+  };
+  await discoverLaunchProviders(registryFactory, ['deepseek', 'strata'], {
+    env,
+    platform: 'linux',
+  });
+  assert.deepEqual(env, { KEEP: 'visible' });
+  assert.equal(seen.deepseek?.DEEPSEEK_API_KEY, 'deepseek-secret');
+  assert.equal(seen.deepseek?.STRATA_API_KEY, undefined);
+  assert.equal(seen.strata?.STRATA_API_KEY, 'strata-secret');
+  assert.equal(seen.strata?.DEEPSEEK_API_KEY, undefined);
+});
+
+test('main scrubs the real host before help and every startup probe, forwarding win32 selection', async () => {
+  const envKeys = ['MULTI_ENABLED_PROVIDERS', 'OPENCODE_API_KEY', 'opencode_api_key'] as const;
+  const previous = new Map(envKeys.map((key) => [key, process.env[key]]));
+  const restore = () => {
+    for (const key of envKeys) {
+      const value = previous.get(key);
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  };
+  process.env.MULTI_ENABLED_PROVIDERS = 'zen';
+  delete process.env.OPENCODE_API_KEY;
+  process.env.opencode_api_key = 'host-secret';
+  const reached: string[] = [];
+  try {
+    await main({
+      env: process.env,
+      platform: 'win32',
+      args: ['--help'],
+      hooks: {
+        command: async () => {
+          reached.push('help');
+          assert.equal(process.env.opencode_api_key, undefined);
+          return true;
+        },
+      },
+    });
+    assert.deepEqual(reached, ['help']);
+
+    process.env.OPENCODE_API_KEY = 'owned-secret';
+    await main({
+      env: process.env,
+      platform: 'win32',
+      args: [],
+      hooks: {
+        command: async () => false,
+        versionProbe: async () => {
+          reached.push('version');
+          assert.equal(process.env.OPENCODE_API_KEY, undefined);
+        },
+        pluginInventory: async () => {
+          reached.push('inventory');
+          assert.equal(process.env.OPENCODE_API_KEY, undefined);
+          return { permissions: {}, multiCoreEnabled: false };
+        },
+        anthropicAuth: async () => {
+          reached.push('anthropic');
+          assert.equal(process.env.OPENCODE_API_KEY, undefined);
+          return true;
+        },
+        discovery: async (factory, selected, options) => {
+          reached.push('discovery');
+          assert.equal(process.env.OPENCODE_API_KEY, undefined);
+          assert.deepEqual(options?.credentials, new Map([['OPENCODE_API_KEY', 'owned-secret']]));
+          return discoverLaunchProviders(factory, selected, options);
+        },
+        afterProbes: () => true,
+      },
+    });
+    assert.deepEqual(reached, ['help', 'version', 'inventory', 'anthropic', 'discovery']);
+  } finally {
+    restore();
+  }
+});
+
+test('Zen rejects an explicitly empty key without falling back to the auth file', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'launcher-zen-credentials-'));
+  t.after(() => removeTemporary(directory));
+  const authFile = path.join(directory, 'auth.json');
+  await writeFile(authFile, JSON.stringify({ opencode: { type: 'api', key: 'valid-disk-key' } }));
+
+  for (const key of ['', '  ']) {
+    const env: NodeJS.ProcessEnv = { OPENCODE_API_KEY: key, OPENCODE_AUTH_FILE: authFile };
+    await assert.rejects(
+      discoverLaunchProviders(createLaunchRegistry, ['zen'], { env, platform: 'linux' }),
+      { message: 'Invalid OpenCode Zen API key.' },
+    );
+    assert.equal(env.OPENCODE_API_KEY, undefined);
+  }
+
+  const valid = await discoverLaunchProviders(createLaunchRegistry, ['zen'], {
+    env: { OPENCODE_API_KEY: 'valid-env-key', OPENCODE_AUTH_FILE: authFile },
+    platform: 'linux',
+  });
+  assert.equal(valid.zenKey, 'valid-env-key');
+  assert.equal(
+    createLaunchRegistry().get('zen')?.unavailableMessage,
+    'Zen is not configured. Set OPENCODE_API_KEY or connect OpenCode Zen.',
   );
 });
 
