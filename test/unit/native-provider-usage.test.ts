@@ -43,10 +43,10 @@ test('provider dashboard reads every enabled provider and preserves unavailable 
   assert.deepEqual(calls.sort(), ['cursor:owned', 'openai:owned', 'zen:owned']);
   assert.deepEqual(
     result.providers.map((row) => row.status),
-    ['ready', 'ready', 'ready', 'disabled', 'unavailable', 'disabled'],
+    ['ready', 'ready', 'ready', 'disabled', 'disabled', 'disabled', 'unavailable', 'disabled'],
   );
   assert.equal(result.providers[2].summary, 'zen quota');
-  assert(result.providers[4].details.includes('No native quota connection'));
+  assert(result.providers[6].details.includes('No native quota connection'));
 });
 
 test('DeepSeek has one built-in dashboard row with its specific unavailable quota explanation', async () => {
@@ -66,6 +66,27 @@ test('DeepSeek has one built-in dashboard row with its specific unavailable quot
   ]);
 });
 
+test('GLM usage rows explain coding-plan quota limits and preserve session receipts', async () => {
+  const dashboard = new ProviderUsageDashboard({ enabled: ['zai', 'zai-coding-cn'] });
+  const view = await dashboard.read('session', empty());
+  for (const [id, url, label] of [
+    ['zai', 'https://z.ai/manage-apikey/subscription', 'Z.AI Coding Plan'],
+    [
+      'zai-coding-cn',
+      'https://open.bigmodel.cn/usercenter/glm-coding/usages',
+      'Z.AI Coding Plan (CN)',
+    ],
+  ] as const) {
+    const row = view.providers.find((candidate) => candidate.id === id);
+    assert.equal(row?.status, 'unavailable');
+    assert.equal(row?.url, url);
+    assert(row?.details[0]?.includes('no account quota'));
+    assert(row?.details[0]?.includes('session tokens appear in receipts'));
+    assert(row?.details.at(-1)?.includes('This session: 0 completed requests'));
+    assert(row?.name.includes(label));
+  }
+});
+
 test('provider dashboard isolates errors and explicitly reports disabled and unsupported billing', async () => {
   const dashboard = new ProviderUsageDashboard({
     enabled: ['openai', 'cursor', 'zen'],
@@ -77,7 +98,7 @@ test('provider dashboard isolates errors and explicitly reports disabled and uns
   const result = await dashboard.read('s', empty());
   assert.deepEqual(
     result.providers.map((row) => row.status),
-    ['ready', 'error', 'unavailable', 'disabled', 'disabled', 'disabled'],
+    ['ready', 'error', 'unavailable', 'disabled', 'disabled', 'disabled', 'disabled', 'disabled'],
   );
   assert(!JSON.stringify(result).includes('secret'));
   assert(result.providers[2].details.some((line) => line.includes('billing console')));

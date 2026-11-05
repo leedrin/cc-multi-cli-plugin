@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import * as piCatalog from '../../plugins/multi-pi/src/catalog.ts';
 import {
   filterPiModels,
   PI_DEEPSEEK_MODELS,
   resolvePiEffort,
   toPiModelDescriptors,
 } from '../../plugins/multi-pi/src/catalog.ts';
+import { PI_PROVIDERS } from '../../plugins/multi-pi/src/providers.ts';
 
 const packageCatalog: {
   'openai-completions': Record<
@@ -67,6 +69,85 @@ test('curated DeepSeek catalog matches only the pinned chat package entries', ()
       },
     );
   }
+});
+
+test('all Pi catalogs are provider-scoped strict allowlists with exact GLM metadata', async () => {
+  const catalogs = Reflect.get(piCatalog, 'PI_MODELS_BY_PROVIDER') as
+    | Record<string, readonly (typeof PI_DEEPSEEK_MODELS)[number][]>
+    | undefined;
+  assert.deepEqual(Object.keys(catalogs ?? {}), ['deepseek', 'zai', 'zai-coding-cn']);
+  assert.deepEqual(
+    PI_PROVIDERS.map(({ id, modelIds }) => [id, modelIds]),
+    Object.entries(catalogs ?? {}).map(([id, models]) => [
+      id,
+      models.map(({ id: modelId }) => modelId),
+    ]),
+  );
+  const expected = {
+    zai: ['glm-5.3', 'glm-5.2'],
+    'zai-coding-cn': ['glm-5.3', 'glm-5.3-flash'],
+  };
+  for (const [provider, ids] of Object.entries(expected)) {
+    const models = catalogs?.[provider] ?? [];
+    assert.deepEqual(
+      models.map(({ id }) => id),
+      ids,
+    );
+    const data: {
+      'openai-completions': Record<string, (typeof packageCatalog)['openai-completions'][string]>;
+    } = JSON.parse(
+      await readFile(
+        new URL(
+          `../../node_modules/@earendil-works/pi-ai/dist/providers/data/${provider}.json`,
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    );
+    for (const model of models) {
+      const packaged = Object.values(data['openai-completions']).find(({ id }) => id === model.id);
+      assert(packaged, `${provider}/${model.id} missing in pinned Pi package`);
+      assert.deepEqual(
+        {
+          id: model.id,
+          name: model.name,
+          api: model.api,
+          type: model.type,
+          contextWindow: model.contextWindow,
+          maxTokens: model.maxTokens,
+          input: model.input,
+          thinkingLevelMap: model.thinkingLevelMap,
+        },
+        {
+          id: packaged.id,
+          name: packaged.name,
+          api: packaged.api,
+          type: packaged.type,
+          contextWindow: packaged.contextWindow,
+          maxTokens: packaged.maxTokens,
+          input: packaged.input,
+          thinkingLevelMap: packaged.thinkingLevelMap,
+        },
+      );
+      assert.deepEqual(
+        ['low', 'medium', 'high', 'xhigh', 'max'].filter(
+          (effort) => typeof model.thinkingLevelMap[effort] === 'string',
+        ),
+        model.id === 'glm-5.2' ? ['high', 'max'] : ['low', 'high', 'max'],
+      );
+      assert.equal(model.defaultEffort, 'high');
+    }
+  }
+  assert.deepEqual(
+    piCatalog.filterPiModelsForProvider('zai', 'glm-5.3').map(({ id }) => id),
+    ['glm-5.3'],
+  );
+  assert.deepEqual(
+    piCatalog.filterPiModelsForProvider('zai-coding-cn', 'glm-5.3').map(({ id }) => id),
+    ['glm-5.3'],
+  );
+  assert.deepEqual(piCatalog.filterPiModelsForProvider('zai', 'glm-5.3-flash'), []);
+  assert.throws(() => piCatalog.filterPiModelsForProvider('zai', 'not-a-model'), /not-a-model/);
 });
 
 test('DeepSeek effort selection defaults and maps to nearest supported levels', () => {

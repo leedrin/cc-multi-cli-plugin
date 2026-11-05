@@ -60,7 +60,7 @@
 
 ## 7. P5b GLM（MP-0605）
 
-- [ ] 7.1 catalog 加入 `zai` 与 `zai-coding-cn`，backend 只 import 对应 provider 工厂；`multi/zai/...` 不被当成 `multi/zai-coding-cn/...`；单测通过
+- [x] 7.1 catalog 加入 `zai` 与 `zai-coding-cn`，backend 只 import 对应 provider 工厂；`multi/zai/...` 不被当成 `multi/zai-coding-cn/...`；单测通过
 - [ ] 7.2 录制 fixture 覆盖 `zaiToolStream` 与 GLM thinking 字段、`zai` 的 effort wire 字段；离线测试通过
 - [ ] 7.3 更新 `docs/pi.md` 的 GLM 端点差异与 `CHANGELOG.md`；`npm run check` 通过
 

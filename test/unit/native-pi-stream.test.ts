@@ -28,7 +28,9 @@ const event = (value: Record<string, unknown>) => value as unknown as AssistantM
 const collect = async (
   events: AssistantMessageEvent[],
   toolNames: string[] = ['Agent', 'search'],
-  overrides: Pick<PiStreamOptions, 'rememberWorkerModel' | 'usage' | 'notice'> = {},
+  overrides: Partial<
+    Pick<PiStreamOptions, 'rememberWorkerModel' | 'usage' | 'notice' | 'label'>
+  > = {},
 ) => {
   const output: Array<{ type: string; value: unknown }> = [];
   const first = events[0];
@@ -687,6 +689,14 @@ test('Pi effort notice is one indexed content block and canonical usage replaces
   );
   assert.deepEqual(streamed.result.content, [
     { type: 'text', text: '[DeepSeek] deepseek-flash does not support effort medium; using high.' },
+    { type: 'text', text: 'answer' },
+  ]);
+  const zaiNotice = await collect(events, ['Agent'], {
+    label: 'Z.AI',
+    notice: 'glm-5.3 does not support effort medium; using high.',
+  });
+  assert.deepEqual(zaiNotice.result.content, [
+    { type: 'text', text: '[Z.AI] glm-5.3 does not support effort medium; using high.' },
     { type: 'text', text: 'answer' },
   ]);
   assert.deepEqual(streamed.result.usage, { input_tokens: 9, output_tokens: 4 });

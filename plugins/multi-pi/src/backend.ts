@@ -1,16 +1,29 @@
 import type { Context } from '@earendil-works/pi-ai';
 import type { OpenAICompletionsOptions } from '@earendil-works/pi-ai/api/openai-completions';
-import { deepseekProvider } from '@earendil-works/pi-ai/providers/deepseek';
 import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript';
 import type { PiCatalogModel } from './catalog.ts';
+import type { PiProviderId } from './providers.ts';
 
-type PiProvider = ReturnType<typeof deepseekProvider>;
+// Fixed provider subpaths are the narrow exception to AGENTS.md's direct-import preference.
+type DeepseekProvider = ReturnType<
+  typeof import('@earendil-works/pi-ai/providers/deepseek').deepseekProvider
+>;
+type PiProvider = DeepseekProvider;
 type PiModel = ReturnType<PiProvider['getModels']>[number];
 type PiEventStream = ReturnType<PiProvider['stream']>;
 type PiIterator = ReturnType<PiEventStream[typeof Symbol.asyncIterator]>;
 type PiEvent = Exclude<Awaited<ReturnType<PiIterator['next']>>['value'], undefined>;
 
+const FACTORIES = {
+  deepseek: async () =>
+    (await import('@earendil-works/pi-ai/providers/deepseek')).deepseekProvider(),
+  zai: async () => (await import('@earendil-works/pi-ai/providers/zai')).zaiProvider(),
+  'zai-coding-cn': async () =>
+    (await import('@earendil-works/pi-ai/providers/zai-coding-cn')).zaiCodingCnProvider(),
+} as const;
+
 export interface PiStreamRequest {
+  providerId: PiProviderId;
   model: PiCatalogModel;
   context: Context;
   apiKey: string;
@@ -31,38 +44,35 @@ export interface OpenPiStreamResult {
 export class PiUpstreamStatus extends Error {
   readonly status: number;
   readonly retryAfter: string | null;
-
   constructor(status: number, retryAfter: string | null) {
-    super(`DeepSeek returned HTTP ${status}.`);
+    super(`Pi provider returned HTTP ${status}.`);
     this.name = 'PiUpstreamStatus';
     this.status = status;
     this.retryAfter = retryAfter;
   }
 }
 
-const deepseek = deepseekProvider();
-const deepseekOrigin = new URL(deepseek.baseUrl ?? 'https://api.deepseek.com').origin;
-
 export function createPiFetch(
   fetchImpl: typeof globalThis.fetch,
+  allowedOrigin = 'https://api.deepseek.com',
+  label = 'DeepSeek',
   onResponse?: (response: Response) => void,
 ): typeof globalThis.fetch {
   return async (input, init) => {
     const target = input instanceof Request ? input.url : String(input);
-    if (new URL(target).origin !== deepseekOrigin) {
-      throw new Error('DeepSeek request target is not allowed.');
+    if (new URL(target).origin !== allowedOrigin) {
+      throw new Error(`${label} request target is not allowed.`);
     }
     let response: Response;
     try {
       response = await fetchImpl(input, { ...init, redirect: 'error' });
     } catch {
-      throw new Error('DeepSeek request failed.');
+      throw new Error(`${label} request failed.`);
     }
     onResponse?.(response);
     if (response.ok) {
       return response;
     }
-
     const safeHeaders = new Headers({ 'content-type': 'application/json' });
     const retryAfter = response.headers.get('retry-after');
     if (retryAfter) {
@@ -78,27 +88,30 @@ export function createPiFetch(
 
 function safeError(label: string, status: number | undefined, retryAfter: string | null): Error {
   if (status !== undefined) {
-    return new PiUpstreamStatus(status, retryAfter);
+    const error = new PiUpstreamStatus(status, retryAfter);
+    error.message = `${label} returned HTTP ${status}.`;
+    return error;
   }
   return new Error(`${label} request failed.`);
+}
+
+export async function loadPiProvider(providerId: PiProviderId) {
+  return FACTORIES[providerId]();
 }
 
 export async function openPiStream(request: PiStreamRequest): Promise<OpenPiStreamResult> {
   if (request.signal?.aborted) {
     throw new Error('aborted');
   }
-  const model = deepseek.getModels().find(({ id }) => id === request.model.id);
+  const provider = await loadPiProvider(request.providerId);
+  const model = provider.getModels().find(({ id }) => id === request.model.id);
   if (!model) {
-    throw new Error('DeepSeek model is unavailable.');
+    throw new Error(`${request.label} model is unavailable.`);
   }
-
-  const requestModel: PiModel = {
-    ...model,
-    thinkingLevelMap: request.model.thinkingLevelMap,
-  };
+  const requestModel = { ...model, thinkingLevelMap: request.model.thinkingLevelMap } as PiModel;
   let status: number | undefined;
   let retryAfter: string | null = null;
-  const events = deepseek.stream(requestModel, normalizeContext(request.context), {
+  const events = provider.stream(requestModel, normalizeContext(request.context), {
     apiKey: request.apiKey,
     env: {},
     cacheRetention: 'short',
@@ -116,10 +129,15 @@ export async function openPiStream(request: PiStreamRequest): Promise<OpenPiStre
       | 'max'
       | undefined,
     ...(request.signal ? { signal: request.signal } : {}),
-    fetch: createPiFetch(request.fetch ?? globalThis.fetch, (response) => {
-      status = response.status;
-      retryAfter = response.headers.get('retry-after');
-    }),
+    fetch: createPiFetch(
+      request.fetch ?? globalThis.fetch,
+      new URL(provider.baseUrl ?? '').origin,
+      request.label,
+      (response) => {
+        status = response.status;
+        retryAfter = response.headers.get('retry-after');
+      },
+    ),
   });
   const iterator = events[Symbol.asyncIterator]();
   try {
@@ -127,19 +145,14 @@ export async function openPiStream(request: PiStreamRequest): Promise<OpenPiStre
     if (request.signal?.aborted) {
       throw new Error('aborted');
     }
-    if (first.done) {
+    if (first.done || first.value.type !== 'start') {
       throw safeError(request.label, status, retryAfter);
     }
-    if (first.value.type === 'error') {
-      throw safeError(request.label, status, retryAfter);
-    }
-    if (first.value.type !== 'start') {
-      throw safeError(request.label, status, retryAfter);
-    }
-    const stream: AsyncIterable<PiEvent> = {
-      [Symbol.asyncIterator]: () => iterator,
+    return {
+      model: requestModel,
+      first: first.value,
+      stream: { [Symbol.asyncIterator]: () => iterator },
     };
-    return { model: requestModel, first: first.value, stream };
   } catch (error) {
     if (request.signal?.aborted || error instanceof PiUpstreamStatus) {
       throw error;

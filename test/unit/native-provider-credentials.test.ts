@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import * as providerCredentials from '../../plugins/multi-core/src/gateway/provider-credentials.ts';
+import { bindPiProviders } from '../../plugins/multi-pi/src/provider.ts';
 
 const { takeProviderCredentials } = providerCredentials;
 
@@ -14,6 +15,23 @@ test('takes declared credentials and deletes them from the supplied environment'
     new Map([['DEEPSEEK_API_KEY', ' secret ']]),
   );
   assert.deepEqual(env, { KEEP: 'untouched' });
+});
+
+test('all enabled Pi credentials are extracted from launcher environment', () => {
+  const env = {
+    DEEPSEEK_API_KEY: 'fake-deepseek',
+    ZAI_API_KEY: 'fake-zai',
+    ZAI_CODING_CN_API_KEY: 'fake-zai-cn',
+  };
+  assert.deepEqual(
+    takeProviderCredentials(env, bindPiProviders()),
+    new Map([
+      ['DEEPSEEK_API_KEY', 'fake-deepseek'],
+      ['ZAI_API_KEY', 'fake-zai'],
+      ['ZAI_CODING_CN_API_KEY', 'fake-zai-cn'],
+    ]),
+  );
+  assert.deepEqual(env, {});
 });
 
 test('returns present empty and whitespace credentials unchanged while deleting them', () => {

@@ -236,6 +236,7 @@ function addAssistant(
   model: PiCatalogModel,
   declared: ReadonlyMap<string, string>,
   callNames: Map<string, string>,
+  providerId: string,
 ): Message | undefined {
   const content: PiAssistantContent[] = [];
   for (const block of blocks(message.content)) {
@@ -248,7 +249,7 @@ function addAssistant(
     role: 'assistant',
     content,
     api: 'openai-completions',
-    provider: 'deepseek',
+    provider: providerId,
     model: model.id,
     usage: {
       input: 0,
@@ -300,9 +301,10 @@ function appendMessage(
   callNames: Map<string, string>,
   routeId: string,
   model: PiCatalogModel,
+  providerId: string,
 ): void {
   if (item.role === 'assistant') {
-    const assistant = addAssistant(item, routeId, model, declared, callNames);
+    const assistant = addAssistant(item, routeId, model, declared, callNames, providerId);
     if (assistant) {
       messages.push(assistant);
     }
@@ -348,6 +350,7 @@ export function toPiContext(
   body: MessagesRequest,
   model: PiCatalogModel,
   routeId: string,
+  providerId = model.providerId ?? 'deepseek',
 ): PiTranslation {
   if (
     body.stop_sequences !== undefined &&
@@ -365,7 +368,7 @@ export function toPiContext(
   const callNames = new Map<string, string>();
   const messages: Message[] = [];
   for (const item of body.messages) {
-    appendMessage(item, messages, declared, callNames, routeId, model);
+    appendMessage(item, messages, declared, callNames, routeId, model, providerId);
   }
   const tools = translateTools(body);
   const systemPrompt = body.system === undefined ? undefined : readText(body.system);

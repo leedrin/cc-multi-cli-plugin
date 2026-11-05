@@ -51,6 +51,63 @@ function loader(openPiStream: (request: Record<string, unknown>) => unknown) {
   return async () => ({ openPiStream }) as never;
 }
 
+test('GLM routes are provider-bound and similarly named routes never cross-match', () => {
+  const international = preparePiRequest(
+    input({
+      body: {
+        ...input().body,
+        model: 'multi/zai/glm-5.3',
+      },
+    }),
+    'fake-zai-key',
+    { providerId: 'zai' },
+  );
+  const china = preparePiRequest(
+    input({
+      body: {
+        ...input().body,
+        model: 'multi/zai-coding-cn/glm-5.3',
+      },
+    }),
+    'fake-cn-key',
+    { providerId: 'zai-coding-cn' },
+  );
+  assert.equal(international.route, 'zai');
+  assert.equal(international.label, 'Z.AI');
+  assert.match(international.authHelp, /ZAI_API_KEY/);
+  assert.equal(china.route, 'zai-coding-cn');
+  assert.equal(china.label, 'Z.AI Coding (CN)');
+  assert.match(china.authHelp, /ZAI_CODING_CN_API_KEY/);
+  assert.throws(
+    () =>
+      preparePiRequest(
+        input({
+          body: {
+            ...input().body,
+            model: 'multi/zai-coding-cn/glm-5.3',
+          },
+        }),
+        'fake-zai-key',
+        { providerId: 'zai' },
+      ),
+    /Unknown Z.AI model/,
+  );
+  assert.throws(
+    () =>
+      preparePiRequest(
+        input({
+          body: {
+            ...input().body,
+            model: 'multi/zai/glm-5.3',
+          },
+        }),
+        'fake-cn-key',
+        { providerId: 'zai-coding-cn' },
+      ),
+    /Unknown Z.AI Coding \(CN\) model/,
+  );
+});
+
 test('Pi request rejects unsupported methods, paths and curated-unknown model IDs', () => {
   assert.throws(() => preparePiRequest(input({ method: 'GET' }), 'fake-key'), /requires POST/);
   assert.throws(

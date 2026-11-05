@@ -9,21 +9,20 @@ import type {
 import { toResponses } from '../../multi-core/src/gateway/responses.ts';
 import { estimateInputTokens, estimateTextTokens } from '../../multi-core/src/gateway/tokens.ts';
 import type { CanonicalTokenUsage } from '../../multi-core/src/gateway/usage-accounting.ts';
-import { PI_DEEPSEEK_MODELS, type PiCatalogModel, resolvePiEffort } from './catalog.ts';
+import { PI_MODELS_BY_PROVIDER, type PiCatalogModel, resolvePiEffort } from './catalog.ts';
 import { toPiContext } from './messages.ts';
+import { type PiProviderId, piProvider } from './providers.ts';
 import { PI_SIGNATURE_PREFIX } from './signature.ts';
 import { translatePiStream } from './stream.ts';
 import { ObservedUsage } from './usage.ts';
 
 const PATHS = ['/v1/messages', '/v1/messages/count_tokens'];
-const LABEL = 'DeepSeek';
-const AUTH_HELP = ' Check DEEPSEEK_API_KEY.';
-const UNAVAILABLE = 'DeepSeek is unavailable. Set DEEPSEEK_API_KEY and relaunch.';
 
 export type PiBackendLoader = () => Promise<typeof import('./backend.ts')>;
 
 export interface PiGatewayRequestDeps {
   loadBackend?: PiBackendLoader;
+  providerId?: PiProviderId;
 }
 
 function estimatePiInputTokens(
@@ -63,14 +62,17 @@ function estimatePiInputTokens(
   return estimateInputTokens(normalized) + thinkingTokens;
 }
 
-function modelFor(bodyModel: string | undefined): { routeId: string; model: PiCatalogModel } {
+function modelFor(
+  bodyModel: string | undefined,
+  expectedProvider: PiProviderId,
+): { routeId: string; model: PiCatalogModel } {
   const identity = typeof bodyModel === 'string' ? decodeModelRoute(bodyModel) : undefined;
-  if (identity?.providerId !== 'deepseek' || identity.preset !== undefined) {
-    throw new Error('Unknown DeepSeek model');
+  if (identity?.providerId !== expectedProvider || identity.preset !== undefined) {
+    throw new Error(`Unknown ${piProvider(expectedProvider).label} model`);
   }
-  const model = PI_DEEPSEEK_MODELS.find(({ id }) => id === identity.modelId);
+  const model = PI_MODELS_BY_PROVIDER[expectedProvider].find(({ id }) => id === identity.modelId);
   if (!model) {
-    throw new Error(`Unknown DeepSeek model: ${identity.modelId}`);
+    throw new Error(`Unknown ${piProvider(expectedProvider).label} model: ${identity.modelId}`);
   }
   return { routeId: bodyModel as string, model };
 }
@@ -80,15 +82,20 @@ export function preparePiRequest(
   apiKey: string,
   deps: PiGatewayRequestDeps = {},
 ): PreparedRequest {
+  const providerId = deps.providerId ?? 'deepseek';
+  const spec = piProvider(providerId);
+  const label = spec.label;
+  const authHelp = ` Check ${spec.credentialEnv}.`;
+  const unavailable = `${label} is unavailable. Set ${spec.credentialEnv} and relaunch.`;
   const { method, pathname, body } = input;
   if (method !== 'POST' || !PATHS.includes(pathname)) {
-    throw new Error('DeepSeek requires POST /v1/messages or /v1/messages/count_tokens');
+    throw new Error(`${label} requires POST /v1/messages or /v1/messages/count_tokens`);
   }
   if (!apiKey.trim()) {
-    throw new Error(UNAVAILABLE);
+    throw new Error(unavailable);
   }
-  const { routeId, model } = modelFor(body.model);
-  const translated = toPiContext(body, model, routeId);
+  const { routeId, model } = modelFor(body.model, providerId);
+  const translated = toPiContext(body, model, routeId, providerId);
   const effort = resolvePiEffort(model, body.output_config?.effort, {
     thinkingDisabled: body.thinking?.type === 'disabled',
   });
@@ -99,26 +106,27 @@ export function preparePiRequest(
   };
   const loadBackend = deps.loadBackend ?? (() => import('./backend.ts'));
   return {
-    label: LABEL,
-    authHelp: AUTH_HELP,
+    label,
+    authHelp,
     endpoint: 'chat/completions',
-    route: 'deepseek',
+    route: providerId,
     inputTokens,
     ...(effort.effort === undefined
       ? {}
       : { completion: { model: routeId, effort: effort.effort } }),
     requestEvent: (requestAgent) => ({
-      route: 'deepseek-request',
+      route: `${providerId}-request`,
       agentId: requestAgent,
       model: body.model,
       ...(effort.effort === undefined ? {} : { effort: effort.effort }),
     }),
-    failureEvent: (status, requestAgent) => ({ route: 'deepseek', agentId: requestAgent, status }),
+    failureEvent: (status, requestAgent) => ({ route: providerId, agentId: requestAgent, status }),
     open: async (signal: AbortSignal, fetchImpl: GatewayFetch): Promise<UpstreamOpen> => {
       try {
         const backend = await loadBackend();
         const usage = new ObservedUsage();
         const opened = await backend.openPiStream({
+          providerId,
           model,
           context: translated.context,
           apiKey,
@@ -127,7 +135,7 @@ export function preparePiRequest(
           reasoningEffort: effort.effort,
           options: translated.options,
           onProviderStreamEvent: (chunk: unknown) => usage.observe(chunk),
-          label: LABEL,
+          label,
         });
         return {
           ok: true,
@@ -136,7 +144,7 @@ export function preparePiRequest(
               { first: opened.first as AssistantMessageEvent, stream: opened.stream },
               {
                 routeId,
-                label: LABEL,
+                label,
                 model: routeId,
                 request: body,
                 inputTokens: inputTokens(),

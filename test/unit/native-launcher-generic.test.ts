@@ -8,7 +8,10 @@ import type {
   ProviderDescriptor,
   ProviderDiscoveryContext,
 } from '../../plugins/multi-core/src/gateway/provider-registry.ts';
-import { ProviderRuntime } from '../../plugins/multi-core/src/gateway/provider-registry.ts';
+import {
+  ProviderRegistry,
+  ProviderRuntime,
+} from '../../plugins/multi-core/src/gateway/provider-registry.ts';
 import {
   createLaunchRegistry,
   discoverLaunchProviders,
@@ -59,6 +62,227 @@ const model = {
   protocol: 'custom' as const,
   capabilities: { text: true },
 };
+
+test('real launch discovery rejects invalid MULTI_PI_MODELS before generic discovery can swallow it', async () => {
+  const env: NodeJS.ProcessEnv = {
+    ZAI_API_KEY: 'fake-zai-key',
+    MULTI_PI_MODELS: 'glm-not-real',
+  };
+  await assert.rejects(
+    discoverLaunchProviders(createLaunchRegistry, ['zai'], { env, platform: 'linux' }),
+    (error: Error) => {
+      assert.match(error.message, /glm-not-real/);
+      assert.match(error.message, /Allowed IDs:.*glm-5\.3.*glm-5\.2/);
+      assert.doesNotMatch(error.message, /fake-zai-key/);
+      return true;
+    },
+  );
+});
+
+function offlineLaunchRegistry() {
+  const registry = createLaunchRegistry();
+  registry.register({
+    id: 'strata',
+    plugin: 'pi',
+    label: 'Offline provider',
+    unavailableMessage: 'Offline provider unavailable',
+    kind: 'direct',
+    direct: {
+      signaturePrefixes: [],
+      prepare: () => {
+        throw new Error('offline discovery only');
+      },
+    },
+    autoReview: { review: 'none', statement: 'unreviewed' },
+    ...genericDescriptor(true, [model]),
+  });
+  return registry;
+}
+
+test('invalid MULTI_PI_MODELS is ignored without effective selected Pi keys', async () => {
+  const factory = offlineLaunchRegistry;
+  const selected = ['strata', 'deepseek', 'zai', 'zai-coding-cn'];
+  for (const keys of [
+    {},
+    { DEEPSEEK_API_KEY: ' ', ZAI_API_KEY: '\t', ZAI_CODING_CN_API_KEY: '\n' },
+  ]) {
+    const result = await discoverLaunchProviders(factory, selected, {
+      env: { ...keys, MULTI_PI_MODELS: 'glm-not-real' },
+      platform: 'linux',
+    });
+    assert.deepEqual(result.availableProviderIds, ['strata']);
+    assert.deepEqual(result.genericModels.strata, [model]);
+    for (const id of ['deepseek', 'zai', 'zai-coding-cn']) {
+      assert.deepEqual(result.genericModels[id], []);
+    }
+  }
+  const disabled = await discoverLaunchProviders(factory, ['strata'], {
+    env: { ZAI_API_KEY: 'fake-disabled-key', MULTI_PI_MODELS: 'glm-not-real' },
+    platform: 'linux',
+  });
+  assert.deepEqual(disabled.availableProviderIds, ['strata']);
+  const blankCredentials = await discoverLaunchProviders(factory, selected, {
+    env: { MULTI_PI_MODELS: 'glm-not-real' },
+    credentials: new Map([['ZAI_API_KEY', '   ']]),
+  });
+  assert.deepEqual(blankCredentials.availableProviderIds, ['strata']);
+});
+
+test('invalid MULTI_PI_MODELS rejects every effective Pi key from env or credentials', async () => {
+  for (const name of ['DEEPSEEK_API_KEY', 'ZAI_API_KEY', 'ZAI_CODING_CN_API_KEY']) {
+    for (const supplied of [false, true]) {
+      const key = `fake-${name}-key`;
+      await assert.rejects(
+        discoverLaunchProviders(createLaunchRegistry, ['deepseek', 'zai', 'zai-coding-cn'], {
+          env: { MULTI_PI_MODELS: 'glm-not-real', ...(supplied ? {} : { [name]: key }) },
+          ...(supplied ? { credentials: new Map([[name, key]]) } : {}),
+          platform: 'linux',
+        }),
+        (error: Error) => {
+          assert.match(error.message, /glm-not-real/);
+          assert.match(
+            error.message,
+            /Allowed IDs: deepseek-v4-pro, deepseek-flash, glm-5\.3, glm-5\.2, glm-5\.3-flash/,
+          );
+          assert.ok(!error.message.includes(key));
+          return true;
+        },
+      );
+    }
+  }
+});
+
+for (const [providerId, name] of [
+  ['deepseek', 'DEEPSEEK_API_KEY'],
+  ['zai', 'ZAI_API_KEY'],
+  ['zai-coding-cn', 'ZAI_CODING_CN_API_KEY'],
+] as const) {
+  for (const source of ['empty map', 'other provider map'] as const) {
+    test(`mixed credential sources reject invalid MULTI_PI_MODELS: ${providerId}, ${source}`, async () => {
+      const key = `fake-env-${providerId}-key`;
+      const otherKey = 'fake-other-provider-key';
+      const credentials = new Map<string, string>(
+        source === 'empty map' ? [] : [['ZEN_API_KEY', otherKey]],
+      );
+      await assert.rejects(
+        discoverLaunchProviders(createLaunchRegistry, [providerId], {
+          env: { [name]: key, MULTI_PI_MODELS: 'glm-not-real' },
+          credentials,
+          platform: 'linux',
+        }),
+        (error: Error) => {
+          assert.match(error.message, /glm-not-real/);
+          assert.match(
+            error.message,
+            /Allowed IDs: deepseek-v4-pro, deepseek-flash, glm-5\.3, glm-5\.2, glm-5\.3-flash/,
+          );
+          assert.ok(!error.message.includes(key));
+          assert.ok(!error.message.includes(otherKey));
+          return true;
+        },
+      );
+    });
+  }
+
+  test(`mixed credential sources preserve explicit blank overrides: ${providerId}`, async () => {
+    for (const value of ['', ' ', '\t\n']) {
+      const result = await discoverLaunchProviders(offlineLaunchRegistry, ['strata', providerId], {
+        env: { [name]: `fake-env-${providerId}-key`, MULTI_PI_MODELS: 'glm-not-real' },
+        credentials: new Map([[name, value]]),
+        platform: 'linux',
+      });
+      assert.deepEqual(result.availableProviderIds, ['strata']);
+      assert.deepEqual(result.genericModels.strata, [model]);
+      assert.deepEqual(result.genericModels[providerId], []);
+    }
+  });
+}
+
+test('real launcher binds all Pi keys to their provider requests and omits providers without keys', async () => {
+  const env: NodeJS.ProcessEnv = {
+    DEEPSEEK_API_KEY: 'fake-deepseek-key',
+    ZAI_API_KEY: 'fake-zai-key',
+    ZAI_CODING_CN_API_KEY: 'fake-cn-key',
+  };
+  const discovery = await discoverLaunchProviders(
+    createLaunchRegistry,
+    ['deepseek', 'zai', 'zai-coding-cn'],
+    { env, platform: 'linux' },
+  );
+  assert.equal(env.DEEPSEEK_API_KEY, undefined);
+  assert.equal(env.ZAI_API_KEY, undefined);
+  assert.equal(env.ZAI_CODING_CN_API_KEY, undefined);
+  assert.deepEqual(discovery.piKeys, {
+    deepseek: 'fake-deepseek-key',
+    zai: 'fake-zai-key',
+    'zai-coding-cn': 'fake-cn-key',
+  });
+  const runtime = launcherRuntime(
+    '',
+    undefined,
+    {},
+    { cursor: undefined, antigravity: undefined, grok: undefined },
+    undefined,
+    discovery.genericModels,
+    createLaunchRegistry,
+    undefined,
+    discovery.piKeys,
+  );
+  for (const [providerId, key, modelId] of [
+    ['deepseek', 'fake-deepseek-key', 'deepseek-v4-pro'],
+    ['zai', 'fake-zai-key', 'glm-5.3'],
+    ['zai-coding-cn', 'fake-cn-key', 'glm-5.3'],
+  ] as const) {
+    const descriptor = runtime.registry?.get(providerId);
+    assert(descriptor?.direct);
+    const prepared = descriptor.direct.prepare({
+      method: 'POST',
+      pathname: '/v1/messages',
+      body: {
+        model: `multi/${providerId}/${modelId}`,
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      session: 'session',
+      fallbackSession: 'fallback',
+    });
+    let authorization: string | null = null;
+    await prepared.open(new AbortController().signal, async (_url, init) => {
+      authorization = new Headers(init?.headers).get('authorization');
+      return new Response('data: [DONE]\\n\\n', { status: 200 });
+    });
+    assert.equal(authorization, `Bearer ${key}`);
+  }
+
+  const onlyZai = await discoverLaunchProviders(createLaunchRegistry, ['zai', 'zai-coding-cn'], {
+    env: { ZAI_API_KEY: 'fake-only-zai-key' },
+    platform: 'linux',
+  });
+  assert.ok(onlyZai.availableProviderIds.includes('zai'));
+  assert.ok(!onlyZai.availableProviderIds.includes('zai-coding-cn'));
+  assert.deepEqual(onlyZai.genericModels['zai-coding-cn'], []);
+  const unavailableRuntime = launcherRuntime(
+    '',
+    undefined,
+    {},
+    { cursor: undefined, antigravity: undefined, grok: undefined },
+    undefined,
+    onlyZai.genericModels,
+    createLaunchRegistry,
+    undefined,
+    onlyZai.piKeys,
+  );
+  assert.throws(
+    () =>
+      unavailableRuntime.registry?.get('zai-coding-cn')?.direct?.prepare({
+        method: 'POST',
+        pathname: '/v1/messages',
+        body: { model: 'multi/zai-coding-cn/glm-5.3', messages: [{ role: 'user', content: 'hi' }] },
+        session: 'session',
+        fallbackSession: 'fallback',
+      }),
+    /ZAI_CODING_CN_API_KEY/,
+  );
+});
 
 test('generic launcher discovery handles available and unavailable providers', async () => {
   const available = genericDescriptor(true, [model]);
@@ -161,9 +385,8 @@ test('launcher takes enabled credentials before discovery and isolates each prov
   const zai = make('zai', 'ZAI_API_KEY');
   const strata = make('strata', 'STRATA_API_KEY');
   const registryFactory = () => {
-    const registry = createBuiltinRegistry();
-    registry.register(zai);
-    registry.register(strata);
+    const registry = new ProviderRegistry();
+    registry.registerMany([zai, strata]);
     return registry;
   };
   const env: NodeJS.ProcessEnv = {
@@ -185,7 +408,7 @@ test('launcher takes enabled credentials before discovery and isolates each prov
 test('real launch registry scrubs DeepSeek only when enabled and isolates other provider contexts', async () => {
   const otherContexts: Array<string | undefined> = [];
   const otherProvider: ProviderDescriptor = {
-    id: 'zai',
+    id: 'strata',
     plugin: 'pi',
     label: 'Z.AI',
     kind: 'direct',
@@ -209,7 +432,7 @@ test('real launch registry scrubs DeepSeek only when enabled and isolates other 
     return registry;
   };
   const enabledEnv: NodeJS.ProcessEnv = { DEEPSEEK_API_KEY: 'fake-deepseek-key' };
-  const enabled = await discoverLaunchProviders(registryFactory, ['deepseek', 'zai'], {
+  const enabled = await discoverLaunchProviders(registryFactory, ['deepseek', 'strata'], {
     env: enabledEnv,
     platform: 'linux',
   });
@@ -218,7 +441,7 @@ test('real launch registry scrubs DeepSeek only when enabled and isolates other 
   assert.deepEqual(otherContexts, [undefined]);
 
   const disabledEnv: NodeJS.ProcessEnv = { DEEPSEEK_API_KEY: 'fake-disabled-key' };
-  const disabled = await discoverLaunchProviders(registryFactory, ['zai'], {
+  const disabled = await discoverLaunchProviders(registryFactory, ['strata'], {
     env: disabledEnv,
     platform: 'linux',
   });

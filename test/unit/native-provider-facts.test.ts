@@ -95,6 +95,10 @@ test('provider facts cover current and planned providers with derived helpers', 
       ['strata', 'pi', 'direct', 'multi-strata'],
     ],
   );
+  assert.deepEqual(PROVIDER_FACTS.find(({ id }) => id === 'zai')?.credentialEnv, ['ZAI_API_KEY']);
+  assert.deepEqual(PROVIDER_FACTS.find(({ id }) => id === 'zai-coding-cn')?.credentialEnv, [
+    'ZAI_CODING_CN_API_KEY',
+  ]);
   assert.equal(isProviderWorker('multi-zai-coding-cn'), true);
   assert.equal(isProviderWorker('multi-unknown'), false);
   assert.equal(isHarnessProvider('cursor'), true);

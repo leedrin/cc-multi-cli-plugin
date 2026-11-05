@@ -47,6 +47,8 @@ import {
 } from '../../multi-openai/src/models.ts';
 import { discoverOpenAI } from '../../multi-openai/src/provider.ts';
 import { openAIUsageReader } from '../../multi-openai/src/usage-adapter.ts';
+import { filterPiModelsForProvider } from '../../multi-pi/src/catalog.ts';
+import { PI_PROVIDERS, validatedPiKey } from '../../multi-pi/src/providers.ts';
 import {
   ZEN_DEFAULT_WORKER_MODEL,
   ZEN_MODELS,
@@ -106,6 +108,15 @@ import {
 
 const enabledProviders = providerSelection(process.env.MULTI_ENABLED_PROVIDERS);
 const enabledProviderIds: readonly string[] | undefined = enabledProviders;
+/** Explicit map entries, including blank values, override the inherited environment. */
+function effectiveCredentialValue(
+  credentialEnv: string,
+  env: NodeJS.ProcessEnv,
+  credentials: ReadonlyMap<string, string>,
+): string | undefined {
+  return credentials.has(credentialEnv) ? credentials.get(credentialEnv) : env[credentialEnv];
+}
+
 const discoveryContext = (
   provider: string,
   baseEnv: NodeJS.ProcessEnv = process.env,
@@ -115,10 +126,7 @@ const discoveryContext = (
 ): ProviderDiscoveryContext => {
   const env = { ...baseEnv };
   for (const name of descriptor?.credentialEnv ?? []) {
-    const value = credentials.get(name);
-    if (value !== undefined) {
-      env[name] = value;
-    }
+    env[name] = effectiveCredentialValue(name, baseEnv, credentials);
   }
   return {
     cwd: process.cwd(),
@@ -134,6 +142,21 @@ export type LaunchRegistryFactory = (credentials?: BuiltinProviderCredentials) =
 /** One registration path shared by launcher discovery and runtime assembly. */
 export function createLaunchRegistry(credentials?: BuiltinProviderCredentials): ProviderRegistry {
   return createBuiltinRegistry(credentials);
+}
+
+function validatePiModelSelection(
+  enabledDescriptors: readonly ProviderDescriptor[],
+  env: NodeJS.ProcessEnv,
+  credentials: ReadonlyMap<string, string>,
+): void {
+  const hasPiKey = PI_PROVIDERS.some(
+    ({ id, credentialEnv }) =>
+      enabledDescriptors.some((descriptor) => descriptor.id === id) &&
+      validatedPiKey(effectiveCredentialValue(credentialEnv, env, credentials)),
+  );
+  if (hasPiKey) {
+    filterPiModelsForProvider('deepseek', env.MULTI_PI_MODELS);
+  }
 }
 
 export async function discoverLaunchProviders(
@@ -155,6 +178,7 @@ export async function discoverLaunchProviders(
     takeProviderCredentials(env, enabledDescriptors, {
       platform: options.platform,
     });
+  validatePiModelSelection(enabledDescriptors, env, credentials);
   const discoveries = {
     openai: (context: ProviderDiscoveryContext) => discoverOpenAI(context),
     zen: (context: ProviderDiscoveryContext) => discoverZen(context),
@@ -215,6 +239,17 @@ export async function discoverLaunchProviders(
     grokModels,
     genericModels,
     deepseekKey: credentials.get('DEEPSEEK_API_KEY'),
+    piKeys: {
+      ...(credentials.get('DEEPSEEK_API_KEY') === undefined
+        ? {}
+        : { deepseek: credentials.get('DEEPSEEK_API_KEY') }),
+      ...(credentials.get('ZAI_API_KEY') === undefined
+        ? {}
+        : { zai: credentials.get('ZAI_API_KEY') }),
+      ...(credentials.get('ZAI_CODING_CN_API_KEY') === undefined
+        ? {}
+        : { 'zai-coding-cn': credentials.get('ZAI_CODING_CN_API_KEY') }),
+    },
     availableProviderIds,
   };
 }
@@ -373,7 +408,7 @@ export async function main(options: LauncherMainOptions = {}): Promise<void> {
     antigravityModels,
     grokModels,
     genericModels,
-    deepseekKey,
+    piKeys,
     availableProviderIds,
   } = discovered;
   const cursorPicker = selectedCursorOptions(cursorModels, fullCatalog);
@@ -419,7 +454,7 @@ export async function main(options: LauncherMainOptions = {}): Promise<void> {
   );
   const usageReaders = providerUsageReaders(authFile, zenKey, { cursor, antigravity, grok });
   const workers = workerCatalog(settings.modelPicker.options, grokModels);
-  const workerRegistry = createBuiltinRegistry({ authFile, zenKey, deepseekKey });
+  const workerRegistry = createBuiltinRegistry({ authFile, zenKey, piKeys });
   const agents = workerDefinitions(workers, workerRegistry);
   const modBridge = new ModBridge();
   const settingsDir = await mkdtemp(path.join(os.tmpdir(), 'multi-native-settings-'));
@@ -448,7 +483,8 @@ export async function main(options: LauncherMainOptions = {}): Promise<void> {
     reviewers.openai,
     genericModels,
     createLaunchRegistry,
-    deepseekKey,
+    undefined,
+    piKeys,
   );
   const receipts = new ReceiptLedger({
     file: process.env.MULTI_RECEIPTS_FILE
@@ -687,8 +723,14 @@ export function launcherRuntime(
   genericModels: Readonly<Record<string, readonly ModelDescriptor[]>> = {},
   registryFactory: LaunchRegistryFactory = createLaunchRegistry,
   deepseekKey?: string,
+  piKeys?: BuiltinProviderCredentials['piKeys'],
 ): ProviderRuntime {
-  const registry = registryFactory({ authFile, zenKey, deepseekKey });
+  const registry = registryFactory({
+    authFile,
+    zenKey,
+    deepseekKey,
+    ...(piKeys === undefined ? {} : { piKeys }),
+  });
   const active: ActiveProvider[] = [];
   const add = (id: string, provider: Omit<ActiveProvider, 'descriptor'>) => {
     const descriptor = registry.get(id);

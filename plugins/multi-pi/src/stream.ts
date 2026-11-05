@@ -140,7 +140,7 @@ class PiStreamTranslator {
     });
     if (this.options.notice) {
       const index = this.nextIndex++;
-      const text = `[DeepSeek] ${this.options.notice}`;
+      const text = `[${this.options.label}] ${this.options.notice}`;
       this.emit('content_block_start', { index, content_block: { type: 'text', text: '' } });
       this.emit('content_block_delta', { index, delta: { type: 'text_delta', text } });
       this.emit('content_block_stop', { index });

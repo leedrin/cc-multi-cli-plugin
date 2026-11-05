@@ -134,7 +134,17 @@ test('production usage menu applies generic provider activation, harness and ena
   const view = await readUsage(runtime);
   assert.deepEqual(
     view.providers.map(({ id }) => id),
-    ['openai', 'cursor', 'zen', 'deepseek', 'antigravity', 'grok', 'strata'],
+    [
+      'openai',
+      'cursor',
+      'zen',
+      'deepseek',
+      'zai',
+      'zai-coding-cn',
+      'antigravity',
+      'grok',
+      'strata',
+    ],
   );
   assert.equal(view.providers.filter(({ id }) => id === 'deepseek').length, 1);
   assert(view.providers.some(({ id }) => id === 'strata'));

@@ -11,6 +11,7 @@ const fakeKey = 'test-only-DEEPSEEK-FAKE-KEY';
 const model = PI_DEEPSEEK_MODELS[0];
 const context = normalizeContext({ messages: [] });
 const request = (overrides: Partial<Parameters<typeof openPiStream>[0]> = {}) => ({
+  providerId: 'deepseek' as const,
   model,
   context,
   apiKey: fakeKey,
@@ -36,6 +37,52 @@ test('Pi keyless runtime discovery does not load backend or pi-ai', () => {
   );
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   assert.equal(result.error, undefined);
+});
+
+test('only ZAI key loads only the ZAI provider in a child process', () => {
+  const launcherUrl = new URL('../../plugins/multi-core/src/launcher.ts', import.meta.url).href;
+  const loaderUrl = new URL('./fixtures/native-pi-zai-import-boundary-loader.mjs', import.meta.url)
+    .href;
+  const script = `
+    const { createLaunchRegistry, discoverLaunchProviders } = await import(${JSON.stringify(launcherUrl)});
+    const found = await discoverLaunchProviders(createLaunchRegistry, ['zai'], {
+      env: { ZAI_API_KEY: 'fake-zai-key' }, platform: 'linux'
+    });
+    if (found.genericModels.zai?.length !== 2) throw new Error('ZAI discovery did not load its models');
+  `;
+  const result = spawnSync(
+    process.execPath,
+    ['--no-warnings', '--experimental-loader', loaderUrl, '--input-type=module', '-e', script],
+    { encoding: 'utf8', timeout: 10000 },
+  );
+  assert.equal(result.status, 0, `${result.stdout}\\n${result.stderr}`);
+  assert.equal(result.error, undefined);
+  assert.match(result.stderr, /PI_PROVIDER_LOADS:/);
+  assert.match(result.stderr, /zai\.js/);
+  assert.doesNotMatch(result.stderr, /all\.js|deepseek\.js|zai-coding-cn\.js/);
+});
+
+test('ZAI import boundary rejects every other provider subpath', () => {
+  const loaderUrl = new URL('./fixtures/native-pi-zai-import-boundary-loader.mjs', import.meta.url)
+    .href;
+  for (const provider of [
+    'all',
+    'deepseek',
+    'zai-coding-cn',
+    'openai',
+    'anthropic',
+    'google-vertex',
+  ]) {
+    const script = `await import('@earendil-works/pi-ai/providers/${provider}');`;
+    const result = spawnSync(
+      process.execPath,
+      ['--no-warnings', '--experimental-loader', loaderUrl, '--input-type=module', '-e', script],
+      { encoding: 'utf8', timeout: 10000 },
+    );
+    assert.equal(result.error, undefined);
+    assert.notEqual(result.status, 0, `${provider} was unexpectedly allowed`);
+    assert.match(result.stderr, /Unexpected Pi provider module:/);
+  }
 });
 
 test('count_tokens estimates in a child process without loading the Pi backend', () => {
@@ -78,6 +125,58 @@ test('Pi model discovery loads its backend only when a key is present', async ()
     loader,
   );
   assert.equal(calls, 1);
+});
+
+test('each GLM backend loads only its provider and confines fetch to its own origin', async () => {
+  for (const [providerId, model, expectedOrigin, label] of [
+    ['zai', { ...PI_DEEPSEEK_MODELS[0], id: 'glm-5.3' }, 'https://api.z.ai', 'Z.AI'],
+    [
+      'zai-coding-cn',
+      { ...PI_DEEPSEEK_MODELS[0], id: 'glm-5.3' },
+      'https://open.bigmodel.cn',
+      'Z.AI Coding (CN)',
+    ],
+  ] as const) {
+    let target = '';
+    await openPiStream({
+      providerId,
+      model,
+      context,
+      apiKey: 'fake-glm-key',
+      label,
+      fetch: async (input) => {
+        target = input instanceof Request ? input.url : String(input);
+        return new Response('data: [DONE]\\n\\n', { status: 200 });
+      },
+    });
+    assert.equal(new URL(target).origin, expectedOrigin);
+  }
+});
+
+test('each GLM origin rejects every other Pi provider origin before fetch', async () => {
+  const origins = {
+    deepseek: 'https://api.deepseek.com',
+    zai: 'https://api.z.ai',
+    'zai-coding-cn': 'https://open.bigmodel.cn',
+  } as const;
+  for (const [providerId, allowedOrigin] of Object.entries(origins)) {
+    let calls = 0;
+    const guarded = createPiFetch(
+      async () => {
+        calls += 1;
+        return new Response(null);
+      },
+      allowedOrigin,
+      providerId,
+    );
+    for (const [otherProvider, otherOrigin] of Object.entries(origins)) {
+      if (otherProvider === providerId) {
+        continue;
+      }
+      await assert.rejects(guarded(`${otherOrigin}/chat/completions`, {}), /target is not allowed/);
+      assert.equal(calls, 0, `${providerId} fetch must not reach ${otherProvider}`);
+    }
+  }
 });
 
 test('Pi requests force redirect error and stay on DeepSeek origin', async () => {

@@ -41,6 +41,24 @@ const USAGE_ROWS = [
     ],
   },
   {
+    id: 'zai',
+    name: 'Z.AI Coding Plan',
+    url: 'https://z.ai/manage-apikey/subscription',
+    unavailable: [
+      'Z.AI exposes no account quota here; session tokens appear in receipts.',
+      'Check the Z.AI coding plan console for usage.',
+    ],
+  },
+  {
+    id: 'zai-coding-cn',
+    name: 'Z.AI Coding Plan (CN)',
+    url: 'https://open.bigmodel.cn/usercenter/glm-coding/usages',
+    unavailable: [
+      'Z.AI Coding (CN) exposes no account quota here; session tokens appear in receipts.',
+      'Check the Z.AI Coding (CN) coding plan console for usage.',
+    ],
+  },
+  {
     id: 'antigravity',
     name: 'Antigravity',
     unavailable: [

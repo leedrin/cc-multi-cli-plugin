@@ -1,11 +1,33 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { PI_DEEPSEEK_MODELS } from '../../plugins/multi-pi/src/catalog.ts';
+import { PI_DEEPSEEK_MODELS, PI_MODELS_BY_PROVIDER } from '../../plugins/multi-pi/src/catalog.ts';
 import { toPiContext } from '../../plugins/multi-pi/src/messages.ts';
 import { encodePiSignature } from '../../plugins/multi-pi/src/signature.ts';
 
 const route = 'multi/deepseek/deepseek-flash';
 const model = PI_DEEPSEEK_MODELS[1];
+
+test('Pi provider history rejects a thinking signature from the similarly named other route', () => {
+  const glmModel = PI_MODELS_BY_PROVIDER.zai[0];
+  const foreignRoute = 'multi/zai-coding-cn/glm-5.3';
+  const signature = encodePiSignature(foreignRoute, { thinking: 'private reasoning' });
+  const translated = toPiContext(
+    {
+      messages: [
+        {
+          role: 'assistant',
+          content: [{ type: 'thinking', thinking: 'private reasoning', signature }],
+        },
+      ],
+      max_tokens: 1,
+    },
+    glmModel,
+    'multi/zai/glm-5.3',
+    'zai',
+  );
+  assert.deepEqual(translated.context.messages, []);
+  assert.equal(JSON.stringify(translated.context).includes('private reasoning'), false);
+});
 
 for (const maxTokens of [-1, 0, 1.5]) {
   test(`Pi translation rejects independent max_tokens boundary ${maxTokens}`, () => {
@@ -40,6 +62,25 @@ for (const [name, payload] of [
     );
   });
 }
+
+test('Pi assistant history uses the selected provider rather than DeepSeek', () => {
+  const translated = toPiContext(
+    {
+      messages: [
+        { role: 'assistant', content: 'earlier' },
+        { role: 'user', content: 'next' },
+      ],
+    },
+    PI_MODELS_BY_PROVIDER.zai[0],
+    'multi/zai/glm-5.3',
+    'zai',
+  );
+  const assistant = translated.context.messages.find((message) => message.role === 'assistant');
+  assert.equal(assistant?.role, 'assistant');
+  if (assistant?.role === 'assistant') {
+    assert.equal(assistant.provider, 'zai');
+  }
+});
 
 test('Pi thinking keeps different redacted metadata separate', () => {
   const content = [

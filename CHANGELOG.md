@@ -10,6 +10,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for current direction and
 
 - **Isolate provider keys during startup probing.** Claude plugin-list probes no longer receive provider API keys in their child-process environment.
 
+- **Add GLM through Pi.** Z.AI international and Z.AI Coding (CN) expose their separate curated coding-plan catalogs and use independent credentials and upstream endpoints.
 - **Use DeepSeek through Pi.** DeepSeek is available as a direct provider through the curated Pi catalog, with local token estimates and canonical upstream usage.
 - **Explain hosted-provider 403 failures.** OpenAI, Zen, and DeepSeek authentication failures now include the provider's credential help for HTTP 403 responses.
 

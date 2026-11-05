@@ -308,7 +308,7 @@ test('provider matrix: picker rows resolve to one worker type per provider', () 
   }
 });
 
-test('provider matrix: the usage dashboard lists all six providers in a stable order', async () => {
+test('provider matrix: the usage dashboard lists all eight providers in a stable order', async () => {
   const dashboard = new ProviderUsageDashboard({
     enabled: ['openai', 'cursor', 'zen', 'deepseek'],
     openai: async () => ({ summary: 'openai quota', details: [] }),
@@ -321,6 +321,8 @@ test('provider matrix: the usage dashboard lists all six providers in a stable o
       ['cursor', 'Cursor', 'unavailable'],
       ['zen', 'OpenCode Zen', 'unavailable'],
       ['deepseek', 'DeepSeek', 'unavailable'],
+      ['zai', 'Z.AI Coding Plan', 'disabled'],
+      ['zai-coding-cn', 'Z.AI Coding Plan (CN)', 'disabled'],
       ['antigravity', 'Antigravity', 'disabled'],
       ['grok', 'Grok Build', 'disabled'],
     ],

@@ -19,7 +19,16 @@ import { CURSOR_TOOLS } from '../../plugins/multi-cursor/src/progress.ts';
 import { GROK_TOOLS } from '../../plugins/multi-grok/src/permissions.ts';
 import { removeTemporary } from '../temporary.ts';
 
-const BUILTIN_IDS = ['openai', 'zen', 'deepseek', 'cursor', 'antigravity', 'grok'];
+const BUILTIN_IDS = [
+  'openai',
+  'zen',
+  'deepseek',
+  'zai',
+  'zai-coding-cn',
+  'cursor',
+  'antigravity',
+  'grok',
+];
 const LEGACY_SIGNATURE_PREFIXES = [
   'multi-openai:',
   'multi-zen-responses:',
@@ -63,9 +72,9 @@ test('built-in descriptor credentials match their single-source provider facts',
   }
 });
 
-test('built-in registry registers six provider descriptors with matching facts', () => {
+test('built-in registry registers eight provider descriptors with matching facts', () => {
   const registry = createBuiltinRegistry();
-  assert.equal(registry.list().length, 6);
+  assert.equal(registry.list().length, 8);
   assert.deepEqual(
     registry.list().map(({ id }) => id),
     BUILTIN_IDS,
@@ -86,7 +95,7 @@ test('Registry prefixes, review policies, and harness unavailable messages retai
     [...LEGACY_SIGNATURE_PREFIXES].sort(),
   );
   for (const descriptor of BUILTIN_PROVIDERS) {
-    if (descriptor.id === 'deepseek') {
+    if (['deepseek', 'zai', 'zai-coding-cn'].includes(descriptor.id)) {
       assert.deepEqual(descriptor.autoReview, {
         review: 'none',
         statement: 'no auto mode: actions run unreviewed',

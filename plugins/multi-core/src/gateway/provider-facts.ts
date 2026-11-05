@@ -45,13 +45,21 @@ export const PROVIDER_FACTS: readonly ProviderFact[] = [
     label: 'DeepSeek',
     credentialEnv: ['DEEPSEEK_API_KEY'],
   },
-  { id: 'zai', plugin: 'pi', kind: 'direct', worker: 'multi-zai', label: 'Z.AI' },
+  {
+    id: 'zai',
+    plugin: 'pi',
+    kind: 'direct',
+    worker: 'multi-zai',
+    label: 'Z.AI',
+    credentialEnv: ['ZAI_API_KEY'],
+  },
   {
     id: 'zai-coding-cn',
     plugin: 'pi',
     kind: 'direct',
     worker: 'multi-zai-coding-cn',
     label: 'Z.AI Coding (CN)',
+    credentialEnv: ['ZAI_CODING_CN_API_KEY'],
   },
   { id: 'strata', plugin: 'pi', kind: 'direct', worker: 'multi-strata', label: 'Strata' },
 ] as const;
