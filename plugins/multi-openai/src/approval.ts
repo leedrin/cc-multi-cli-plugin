@@ -10,6 +10,7 @@ import type {
   ReviewInput,
   ReviewVerdict,
 } from '../../multi-core/src/gateway/verdicts.ts';
+import type { CodexAuthOptions } from './auth.ts';
 import { codexRequest } from './auth.ts';
 import { reviewEvidence } from './review-evidence.ts';
 import { withReviewSlot } from './review-limit.ts';
@@ -25,15 +26,20 @@ const endpoint = 'https://chatgpt.com/backend-api/codex';
 export async function discoverOpenAIReviewer(
   authFile: string,
   fetchImpl: GatewayFetch = fetch,
+  options: CodexAuthOptions = {},
 ): Promise<boolean> {
   const signal = AbortSignal.timeout(10000);
-  const response = await codexRequest(authFile, signal, (headers) =>
-    fetchImpl(`${endpoint}/models?client_version=0.155.0`, {
-      method: 'GET',
-      headers: { ...headers },
-      signal,
-      redirect: 'error',
-    }),
+  const response = await codexRequest(
+    authFile,
+    signal,
+    (headers) =>
+      fetchImpl(`${endpoint}/models?client_version=0.155.0`, {
+        method: 'GET',
+        headers: { ...headers },
+        signal,
+        redirect: 'error',
+      }),
+    options,
   );
   if (!response.ok) {
     await response.body?.cancel();

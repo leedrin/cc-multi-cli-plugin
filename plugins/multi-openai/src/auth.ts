@@ -153,7 +153,7 @@ async function refreshIfUnchanged(
   if (path.basename(authFile) !== 'auth.json') {
     throw renewalFailure();
   }
-  const environment = { ...process.env, ...options.env, CODEX_HOME: path.dirname(authFile) };
+  const environment = { ...(options.env ?? process.env), CODEX_HOME: path.dirname(authFile) };
   const invocation = executableInvocation(
     resolveExecutable('codex', {
       platform: options.platform,
