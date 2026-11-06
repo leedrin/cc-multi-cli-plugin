@@ -3,9 +3,11 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import { BUILTIN_PROVIDERS } from '../../plugins/multi-core/src/gateway/builtin-providers.ts';
+import type { MessagesResponse } from '../../plugins/multi-core/src/gateway/messages.ts';
 import {
   type ProviderDescriptor,
   ProviderRegistry,
+  ProviderRuntime,
 } from '../../plugins/multi-core/src/gateway/provider-registry.ts';
 import type {
   ProviderUsageReader,
@@ -161,6 +163,210 @@ test('a generic Strata descriptor reaches picker, worker, runtime, and productio
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+test('reviewer policy and reviewer instance are selected from a non-OpenAI descriptor', async (t) => {
+  const fakeRegistry = new ProviderRegistry();
+  const descriptor = registry.get('strata');
+  assert.ok(descriptor?.direct);
+  fakeRegistry.registerMany(BUILTIN_PROVIDERS.filter(({ id }) => id !== 'strata'));
+  const isolated = {
+    ...descriptor,
+    autoReview: { review: 'reviewer' as const, statement: 'Fixture reviewer' },
+  };
+  fakeRegistry.register(isolated);
+  let reviewerCalls = 0;
+  const reviewer = async () => {
+    reviewerCalls += 1;
+    return { model: 'fixture-reviewer', outcome: 'deny' as const, reason: 'fixture denial' };
+  };
+  const response: MessagesResponse = {
+    id: 'fixture-response',
+    type: 'message',
+    role: 'assistant',
+    model: 'fixture-one',
+    content: [{ type: 'tool_use', id: 'fixture-call', name: 'Bash', input: { command: 'true' } }],
+    stop_reason: 'tool_use',
+    stop_sequence: null,
+    usage: { input_tokens: 1, output_tokens: 1 },
+  };
+  isolated.direct = {
+    ...descriptor.direct,
+    prepare: () => ({
+      label: 'Strata',
+      authHelp: '',
+      endpoint: 'fixture',
+      route: 'strata',
+      inputTokens: () => 1,
+      requestEvent: () => ({ route: 'strata' }),
+      failureEvent: () => ({ route: 'strata' }),
+      open: async () => ({ ok: true, translate: async () => response }),
+    }),
+  };
+  const server = createNativeGateway({
+    token: 'fixture-review-token',
+    runtime: new ProviderRuntime([{ descriptor: isolated, models, reviewer }], {
+      registry: fakeRegistry,
+    }),
+  });
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  assert(address && typeof address === 'object');
+  const result = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-multi-gateway-token': 'fixture-review-token',
+    },
+    body: JSON.stringify({
+      model: 'multi/strata/fixture-one',
+      messages: [{ role: 'user', content: 'review this' }],
+      safeguards: [{ type: 'dangerous_tool_use', classifier_context: { permission_mode: 'auto' } }],
+    }),
+  });
+  assert.equal(result.status, 200);
+  const reply = (await result.json()) as MessagesResponse & {
+    safeguard_results?: Array<{ status: { tool_uses: Record<string, { outcome: string }> } }>;
+  };
+  assert.equal(reviewerCalls, 1);
+  assert.equal(reply.safeguard_results?.[0]?.status.tool_uses['fixture-call']?.outcome, 'flagged');
+});
+
+async function reviewScenario(
+  t: import('node:test').TestContext,
+  review: 'reviewer' | 'none',
+  runtimeReviewer: boolean,
+  activateOpenAIReviewer = false,
+) {
+  const fakeRegistry = new ProviderRegistry();
+  const base = registry.get('strata');
+  assert.ok(base?.direct);
+  fakeRegistry.registerMany(BUILTIN_PROVIDERS.filter(({ id }) => id !== 'strata'));
+  const descriptor = {
+    ...base,
+    autoReview: {
+      review,
+      statement: review === 'none' ? 'no auto mode: actions run unreviewed' : 'Fixture reviewer',
+    },
+  };
+  fakeRegistry.register(descriptor);
+  let reviewerCalls = 0;
+  const reviewer = async () => {
+    reviewerCalls += 1;
+    return { model: 'fixture-reviewer', outcome: 'deny' as const, reason: 'fixture denial' };
+  };
+  let openAIReviewerCalls = 0;
+  const openAIReviewer = async () => {
+    openAIReviewerCalls += 1;
+    return {
+      model: 'openai-fixture-reviewer',
+      outcome: 'deny' as const,
+      reason: 'OpenAI fixture denial',
+    };
+  };
+  const response: MessagesResponse = {
+    id: 'fixture-response',
+    type: 'message',
+    role: 'assistant',
+    model: 'fixture-one',
+    content: [{ type: 'tool_use', id: 'fixture-call', name: 'Bash', input: { command: 'true' } }],
+    stop_reason: 'tool_use',
+    stop_sequence: null,
+    usage: { input_tokens: 1, output_tokens: 1 },
+  };
+  descriptor.direct = {
+    ...base.direct,
+    prepare: () => ({
+      label: 'Strata',
+      authHelp: '',
+      endpoint: 'fixture',
+      route: 'strata',
+      inputTokens: () => 1,
+      requestEvent: () => ({ route: 'strata' }),
+      failureEvent: () => ({ route: 'strata' }),
+      open: async () => ({ ok: true, translate: async () => response }),
+    }),
+  };
+  const openAIDescriptor = fakeRegistry.get('openai');
+  assert.ok(openAIDescriptor);
+  const runtimeProviders = [
+    { descriptor, models, ...(runtimeReviewer ? { reviewer } : {}) },
+    ...(activateOpenAIReviewer
+      ? [{ descriptor: openAIDescriptor, models: [], reviewer: openAIReviewer }]
+      : []),
+  ];
+  const server = createNativeGateway({
+    token: 'fixture-review-token',
+    runtime: new ProviderRuntime(runtimeProviders, { registry: fakeRegistry }),
+  });
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  assert(address && typeof address === 'object');
+  const result = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-multi-gateway-token': 'fixture-review-token',
+    },
+    body: JSON.stringify({
+      model: 'multi/strata/fixture-one',
+      messages: [{ role: 'user', content: 'review this' }],
+      safeguards: [{ type: 'dangerous_tool_use', classifier_context: { permission_mode: 'auto' } }],
+    }),
+  });
+  assert.equal(result.status, 200);
+  const reply = (await result.json()) as MessagesResponse & {
+    safeguard_results?: Array<{ status: { tool_uses: Record<string, { outcome: string }> } }>;
+  };
+  const statementResponse = await fetch(`http://127.0.0.1:${address.port}/multi/mod/telemetry`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-multi-gateway-token': 'fixture-review-token',
+    },
+    body: JSON.stringify({ sessionId: 'fixture-session', model: 'multi/strata/fixture-one' }),
+  });
+  const statement = (await statementResponse.json()) as { reviewStatement?: string };
+  return { reviewerCalls, openAIReviewerCalls, reply, statement: statement.reviewStatement };
+}
+
+test('descriptor review none does not call an available runtime reviewer', async (t) => {
+  const { reviewerCalls, reply } = await reviewScenario(t, 'none', true);
+  assert.equal(reviewerCalls, 0);
+  assert.equal(
+    reply.safeguard_results?.[0]?.status.tool_uses['fixture-call']?.outcome,
+    'not_flagged',
+  );
+});
+
+test('reviewer descriptor without runtime reviewer reports unreviewed and does not borrow OpenAI', async (t) => {
+  const { reviewerCalls, openAIReviewerCalls, reply, statement } = await reviewScenario(
+    t,
+    'reviewer',
+    false,
+    true,
+  );
+  assert.equal(reviewerCalls, 0);
+  assert.equal(openAIReviewerCalls, 0);
+  assert.equal(
+    reply.safeguard_results?.[0]?.status.tool_uses['fixture-call']?.outcome,
+    'not_flagged',
+  );
+  assert.equal(statement, 'no auto mode: actions run unreviewed');
 });
 
 async function typescriptFiles(directory: string): Promise<string[]> {

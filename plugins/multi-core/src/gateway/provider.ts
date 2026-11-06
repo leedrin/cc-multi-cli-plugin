@@ -126,14 +126,11 @@ export const PROVIDER_AUTO_REVIEW: Record<ProviderName, AutoReviewPolicy> = {
 };
 
 export function autoReviewPolicy(
-  provider: ProviderName,
+  policy: AutoReviewPolicy,
   reviewerAvailable: boolean,
+  unavailableStatement = 'no auto mode: actions run unreviewed',
 ): AutoReviewPolicy {
-  const policy = PROVIDER_AUTO_REVIEW[provider];
   return policy.review === 'reviewer' && !reviewerAvailable
-    ? {
-        review: 'none',
-        statement: 'OpenAI reviewer unavailable; no auto mode: actions run unreviewed',
-      }
+    ? { review: 'none', statement: unavailableStatement }
     : policy;
 }

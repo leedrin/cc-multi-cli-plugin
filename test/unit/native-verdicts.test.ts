@@ -38,7 +38,13 @@ test('provider table determines verdicts for every supported mode and launch dis
     keyof typeof PROVIDER_AUTO_REVIEW
   >) {
     for (const available of [true, false]) {
-      const policy = autoReviewPolicy(provider, available);
+      const policy = autoReviewPolicy(
+        PROVIDER_AUTO_REVIEW[provider],
+        available,
+        provider === 'openai'
+          ? 'OpenAI reviewer unavailable; no auto mode: actions run unreviewed'
+          : undefined,
+      );
       assert(policy.statement.length > 0);
       for (const mode of [
         'auto',
@@ -66,8 +72,13 @@ test('provider table determines verdicts for every supported mode and launch dis
       }
     }
   }
-  assert.equal(autoReviewPolicy('openai', false).review, 'none');
-  assert.match(autoReviewPolicy('openai', false).statement, /unreviewed/);
+  const unavailableOpenAI = autoReviewPolicy(
+    PROVIDER_AUTO_REVIEW.openai,
+    false,
+    'OpenAI reviewer unavailable; no auto mode: actions run unreviewed',
+  );
+  assert.equal(unavailableOpenAI.review, 'none');
+  assert.match(unavailableOpenAI.statement, /unreviewed/);
 });
 
 test('Pi auto runs unreviewed with its statement while plan rejects writes and allows reads', async () => {

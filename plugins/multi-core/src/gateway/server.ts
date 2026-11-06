@@ -261,11 +261,19 @@ export function createNativeGateway({
   const rootRequests = new Map<string, MessagesRequest>();
 
   function reviewFor(provider: Exclude<ProviderRoute, 'anthropic'>) {
-    const reviewer = provider === 'openai' ? activeRuntime.provider('openai')?.reviewer : undefined;
-    const policy =
-      provider === 'openai'
-        ? autoReviewPolicy(provider, Boolean(reviewer))
-        : (providerRegistry.get(provider)?.autoReview ?? autoReviewPolicy(provider, false));
+    const descriptor = providerRegistry.get(provider);
+    const runtimeProvider = activeRuntime.provider(provider);
+    const reviewer =
+      descriptor?.autoReview.review === 'reviewer' ? runtimeProvider?.reviewer : undefined;
+    const policy = descriptor?.autoReview
+      ? autoReviewPolicy(
+          descriptor.autoReview,
+          Boolean(reviewer),
+          descriptor.id === 'openai'
+            ? 'OpenAI reviewer unavailable; no auto mode: actions run unreviewed'
+            : undefined,
+        )
+      : { review: 'none' as const, statement: 'no auto mode: actions run unreviewed' };
     return { reviewer, policy };
   }
 
@@ -847,15 +855,7 @@ export function createNativeGateway({
         if (classification.kind !== 'provider' || classification.route === 'anthropic') {
           return undefined;
         }
-        const policy =
-          classification.route === 'openai'
-            ? autoReviewPolicy(
-                classification.route,
-                Boolean(activeRuntime.provider('openai')?.reviewer),
-              )
-            : (providerRegistry.get(classification.route)?.autoReview ??
-              autoReviewPolicy(classification.route, false));
-        return policy.statement;
+        return reviewFor(classification.route).policy.statement;
       },
       permissionModes,
       compactions,
