@@ -80,10 +80,10 @@
 
 ## 10. 集成检查
 
-- [ ] 10.1 完整运行 `npm run check` 与 `npm run test:mod`，无 `DEP0190` 警告
-- [ ] 10.2 未启用 `multi-pi` 时 picker、worker 与第 1 组快照一致，且环境变量未被删除
-- [ ] 10.3 逐条对照 `specs/` 各场景与 DD §19 测试矩阵，确认都有对应测试
-- [ ] 10.4 确认 diff 不含 Generic API Provider、Pi NativeHarness 或动态 provider 插件加载
+- [x] 10.1 完整运行 `npm run check` 与 `npm run test:mod`，无 `DEP0190` 警告
+- [x] 10.2 未启用 `multi-pi` 时 picker、worker 与第 1 组快照一致，且环境变量未被删除
+- [x] 10.3 逐条对照 `specs/` 各场景与 DD §19 测试矩阵，确认都有对应测试
+- [x] 10.4 确认 diff 不含 Generic API Provider、Pi NativeHarness 或动态 provider 插件加载
 
 ## Workflow follow-up
 

@@ -816,7 +816,7 @@ S1 和 S3 需要实际运行下载的 Pi 代码。它们是 P0 的一部分，�
 | 安全 | 金丝雀 key：跑完整流程后断言不出现在事件、receipt、trace、错误、`gatewayEnvironment`、harness env；单一主机；不访问 `~/.pi`；未启用时变量不被删除 |
 | Strata | 非回环 `http://`、非法 URL 报错；缺地址时不出现在 picker 和 worker；回环地址无 key 时发送占位值，非回环地址无 key 时报错；启用后不读 `~/.pi/agent/models.json`；带 effort 的请求丢弃 effort 并在响应中提示一次；usage 走 §13 |
 | 平台 | `takeProviderCredentials` 和 launcher 分支接受显式 `platform`，在 Linux 上覆盖 Windows 分支 |
-| 性能 | 无 key 启动不加载 `pi-ai`（断言模块未被 import）；Registry 构建 < 100 ms（PRD §59） |
+| 性能 | 无 key 启动不加载 `pi-ai`（断言模块未被 import）；Registry 构建 < 100 ms（PRD §59；口径为多次运行的中位数，不要求每次都低于 100 ms） |
 | 回归 | 现有全部单测；P0 快照；`npm run test:mod` |
 
 **Live：** 新增 `npm run test:live:pi`，只在用户明确批准时运行，加入 AGENTS.md 的 Verification 表。
