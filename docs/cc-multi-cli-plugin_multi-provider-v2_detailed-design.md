@@ -721,6 +721,21 @@ Strata 是维护者写在本地 Pi 配置里的自定义 provider，不在 `pi-a
 - 任一调用的 `stop_reason` 为 `max_tokens`，或 thinking 被截断而没有产生文本或工具调用时，该场景记为“未完成”，不算通过。
 - 报告列出每个 provider 的实际调用次数、各场景结果和 usage。Cursor Fast 规则不受影响。
 
+### 17.1 Live 验收结果（2026-11-07）
+
+用户于 2026-11-07 批准 P6 付费 live 验收，范围为 DeepSeek、GLM zai-coding-cn、Strata。live 脚本只读环境变量；key 由编排者在运行时从用户本机的 Pi 配置中取出，注入子进程环境，不写入仓库，也不打印。上游调用次数按 gateway 请求事件计数。
+
+| Provider | 模型 / effort | 上游调用 | 多轮工具调用 | thinking 往返 | 用量显示 | usage（input / output / cache_read） |
+| --- | --- | --- | --- | --- | --- | --- |
+| DeepSeek | `deepseek-flash` / low | 2 | 通过 | 通过 | 通过 | 301 / 63 / 0；253 / 13 / 128 |
+| GLM `zai-coding-cn` | `glm-5.3-flash` / high | 本轮 2，累计 5 | 通过 | 通过 | 通过 | 167 / 37 / 0；84 / 31 / 128 |
+| Strata（本地 loopback） | `qwen3.8-flash-next` / 无 effort | 本轮 2，累计 5 | 通过 | 不适用：模型不支持 thinking/effort | 通过 | 309 / 68 / 0；54 / 33 / 304 |
+
+- **GLM**：先按最低档 low 运行。网关发送的请求是正确的（`thinking: {type: enabled}`，`reasoning_effort: low`），但上游只返回了工具调用，没有推理内容，thinking 场景因此记为未完成。这一轮用了 1 次调用，之后的诊断又用了 2 次。经用户决定改用 high 重跑，全部通过。GLM 累计 5 次调用，在 10 次上限之内。
+- **Strata**：本地服务只接受它当前加载的模型 ID（量化版本，会变化），对 `qwen3.8-flash-next` 返回 400 `Choose a loaded model ID`。按用户决定，对外统一称 `qwen3.8-flash-next`，向上游发送的模型名在每次请求时从 `/models` 解析（T054/T055，提交 8c55f7c）。修复后重跑通过。Strata 是本地服务，不产生费用。
+- **zai 国际端点**：未做 live 验收，只有离线覆盖，已写入 `CHANGELOG.md`。
+- Milestone D 达成：DeepSeek 与 GLM（key 所属端点 `zai-coding-cn`）均通过 live 验收；Strata 单独验收，也已通过。
+
 ---
 
 # 18. 先行验证

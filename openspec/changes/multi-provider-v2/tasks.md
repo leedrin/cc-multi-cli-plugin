@@ -68,15 +68,15 @@
 
 - [x] 8.1 用 `createProvider` 定义 Strata，地址和 key 来自 Multi 的环境变量；非回环 `http://` 与非法 URL 报错；缺地址时不出现在 picker 和 worker；回环地址无 key 发送占位值，非回环无 key 报错；不读 `~/.pi/agent/models.json`；单测通过
 - [x] 8.2 Strata 模型无 effort，带 effort 的请求丢弃 effort 并提示一次；usage 走第 6.7 项的规则；fixture 离线通过
-- [ ] 8.3 更新 `docs/pi.md` 的 Strata 配置与 `CHANGELOG.md`；`npm run check` 通过
+- [x] 8.3 更新 `docs/pi.md` 的 Strata 配置与 `CHANGELOG.md`；`npm run check` 通过
 
 ## 9. P6 Live 验收（需用户批准）
 
-- [ ] 9.1 取得用户对付费 live 验收的明确批准，否则本组保持未完成
-- [ ] 9.2 DeepSeek 运行 `npm run test:live:pi`：多轮工具调用、thinking 往返、用量显示；≤10 次上游调用，最低 effort，`max_tokens` 约 1024；截断记为未完成
-- [ ] 9.3 GLM（key 所属端点）同 9.2；另一端点只有离线覆盖，写入 `CHANGELOG.md`
-- [ ] 9.4 Strata 单独验收（不阻塞里程碑）
-- [ ] 9.5 报告每个 provider 的实际调用次数、各场景结果和 usage，写入 DD §17
+- [x] 9.1 取得用户对付费 live 验收的明确批准，否则本组保持未完成
+- [x] 9.2 DeepSeek 运行 `npm run test:live:pi`：多轮工具调用、thinking 往返、用量显示；≤10 次上游调用，最低 effort，`max_tokens` 约 1024；截断记为未完成
+- [x] 9.3 GLM（key 所属端点）同 9.2；另一端点只有离线覆盖，写入 `CHANGELOG.md`
+- [x] 9.4 Strata 单独验收（不阻塞里程碑）
+- [x] 9.5 报告每个 provider 的实际调用次数、各场景结果和 usage，写入 DD §17
 
 ## 10. 集成检查
 

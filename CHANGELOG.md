@@ -15,6 +15,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for current direction and
 
 - **Add GLM through Pi.** Z.AI international and Z.AI Coding (CN) expose their separate curated coding-plan catalogs and use independent credentials and upstream endpoints; only the endpoint matching the available key will receive live verification, while the other remains offline-verified. See [DeepSeek and GLM via Pi](docs/pi.md).
 - **Use DeepSeek through Pi.** DeepSeek is available as a direct provider through the curated Pi catalog, with local token estimates and canonical upstream usage.
+- Live acceptance (2026-11-07): DeepSeek, GLM `zai-coding-cn` and local Strata pass the Pi live checks; the international `zai` endpoint is covered by offline tests only.
 - **Explain hosted-provider 403 failures.** OpenAI, Zen, and DeepSeek authentication failures now include the provider's credential help for HTTP 403 responses.
 
 - **Keep enabled provider API keys out of child processes.** Multi now removes enabled providers' credential environment variables from its process environment before provider discovery and passes each key only to its owning provider. With Zen enabled, `OPENCODE_API_KEY` is also withheld from child processes.
