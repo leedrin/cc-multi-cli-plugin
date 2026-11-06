@@ -142,6 +142,76 @@ export async function loadPiProvider(
   return FACTORIES[providerId]();
 }
 
+async function resolveStrataModelId(request: PiStreamRequest): Promise<string> {
+  const baseUrl = request.baseUrl;
+  if (!baseUrl) {
+    throw new Error('Strata model and base URL are required.');
+  }
+  const target = new URL(`${baseUrl.replace(/\/+$/, '')}/models`);
+  const fetchImpl = request.fetch ?? globalThis.fetch;
+  const signal = request.signal
+    ? AbortSignal.any([request.signal, AbortSignal.timeout(5_000)])
+    : AbortSignal.timeout(5_000);
+  let response: Response;
+  try {
+    response = await fetchImpl(target, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${request.apiKey}` },
+      signal,
+      redirect: 'error',
+    });
+  } catch {
+    if (request.signal?.aborted) {
+      throw new Error('aborted');
+    }
+    throw new Error('Strata /models request failed (model count unavailable).');
+  }
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(`Strata /models returned HTTP ${response.status} (model count unavailable).`);
+  }
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    if (request.signal?.aborted) {
+      throw new Error('aborted');
+    }
+    throw new Error('Strata /models returned invalid JSON (model count unavailable).');
+  }
+  if (
+    !payload ||
+    typeof payload !== 'object' ||
+    !('data' in payload) ||
+    !Array.isArray(payload.data)
+  ) {
+    throw new Error('Strata /models returned an invalid model list (model count unavailable).');
+  }
+  const models = payload.data;
+  if (
+    !models.every(
+      (entry) =>
+        entry !== null &&
+        typeof entry === 'object' &&
+        'id' in entry &&
+        typeof entry.id === 'string' &&
+        entry.id.length > 0,
+    )
+  ) {
+    throw new Error(`Strata /models returned an invalid model list (${models.length} models).`);
+  }
+  const ids = models.map((entry) => (entry as { id: string }).id);
+  if (ids.includes(request.model.id)) {
+    return request.model.id;
+  }
+  if (ids.length === 1) {
+    return ids[0] as string;
+  }
+  throw new Error(
+    `Strata /models returned ${ids.length} models; expected exactly one or ${request.model.id}.`,
+  );
+}
+
 export async function openPiStream(request: PiStreamRequest): Promise<OpenPiStreamResult> {
   if (request.signal?.aborted) {
     throw new Error('aborted');
@@ -151,8 +221,11 @@ export async function openPiStream(request: PiStreamRequest): Promise<OpenPiStre
   if (!model) {
     throw new Error(`${request.label} model is unavailable.`);
   }
+  const wireModelId =
+    request.providerId === 'strata' ? await resolveStrataModelId(request) : request.model.id;
   const requestModel = {
     ...model,
+    id: wireModelId,
     ...(request.baseUrl === undefined ? {} : { baseUrl: request.baseUrl }),
     thinkingLevelMap: request.model.thinkingLevelMap,
   } as PiModel;

@@ -37,7 +37,12 @@ test('disabled providers reject typed models and token counts without upstream r
         body: JSON.stringify({ ...request, model: `multi/${provider}/test` }),
       });
       assert.equal(response.status, 400);
-      assert.match(await response.text(), /not enabled/);
+      assert.match(
+        await response.text(),
+        new RegExp(
+          `multi-${provider} plugin \\(provider ${provider}\\) is not enabled for this session\\.`,
+        ),
+      );
     }
   }
   assert.equal(requests, 0);

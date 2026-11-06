@@ -126,6 +126,7 @@ export interface GatewayOptions {
   jsonKeepAliveMs?: number;
   /** Where Claude's own traffic goes: Anthropic by default, or the caller's own base URL. */
   anthropicBaseUrl?: string;
+  /** Provider IDs, expanded from plugin selections by the launcher. */
   enabledProviders?: readonly string[];
   fetchImpl?: GatewayFetch;
   onEvent?: (event: GatewayEvent) => void;
@@ -1376,8 +1377,12 @@ function assertProviderEnabled(model: string | null, enabled: readonly string[] 
     throw new BadRequest(`Unknown provider "${classification.provider}".`);
   }
   const provider = model ? decodeModelRoute(model)?.providerId : undefined;
+  const plugin = PROVIDER_FACTS.find((fact) => fact.id === provider)?.plugin;
+  // The launcher expands selected plugins into provider IDs before passing this list.
   if (model && enabled && !enabled.includes(provider ?? '')) {
-    throw new BadRequest('This provider plugin is not enabled for this session.');
+    throw new BadRequest(
+      `The multi-${plugin} plugin (provider ${provider}) is not enabled for this session.`,
+    );
   }
 }
 

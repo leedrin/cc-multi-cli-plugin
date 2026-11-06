@@ -22,7 +22,7 @@ interface ProviderConfig {
   model: string;
   key?: string;
   strataBaseUrl?: string;
-  effort?: 'low';
+  effort?: 'low' | 'high';
   supportsThinking: boolean;
 }
 
@@ -88,7 +88,7 @@ async function runPiLive(): Promise<void> {
       id: providerId,
       model: selection.model,
       key,
-      effort: 'low',
+      effort: 'high',
       supportsThinking: true,
     };
     registry = createBuiltinRegistry({ piKeys: { 'zai-coding-cn': key } });
@@ -147,6 +147,7 @@ async function runPiLive(): Promise<void> {
     maxUpstreamRequests,
     provider: providerId,
     model: selection.model,
+    ...(config.effort === undefined ? {} : { effort: config.effort }),
     scenarios,
     scan: scanned,
     write: (value) => writeFile(reportPath, value, 'utf8'),

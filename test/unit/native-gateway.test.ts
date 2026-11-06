@@ -33,6 +33,7 @@ import {
   toolName,
   callId as wireCallId,
 } from '../../plugins/multi-core/src/gateway/tools.ts';
+import { providerSelection } from '../../plugins/multi-core/src/install/plugins.ts';
 import { readCodexAuth } from '../../plugins/multi-openai/src/auth.ts';
 import { openaiInstructions } from '../../plugins/multi-openai/src/instructions.ts';
 import { MODELS, OPENAI_WORKER_EFFORT } from '../../plugins/multi-openai/src/models.ts';
@@ -1354,13 +1355,72 @@ async function harnessPermissionModes(session = 'routing-session') {
   return modes;
 }
 
-test('provider enablement gates on the decoded provider identity with unchanged errors', async (t) => {
+test('provider enablement gates on the owning plugin identity', async (t) => {
   const call = await gateway(t, () => assert.fail('Disabled providers must not reach upstream'), {
     enabledProviders: ['openai'],
   });
   const response = await call({ ...body, model: 'multi/zen/gpt-5.6-luna' });
   assert.equal(response.status, 400);
-  assert.match(await response.text(), /This provider plugin is not enabled for this session\./);
+  assert.match(
+    await response.text(),
+    /multi-zen plugin \(provider zen\) is not enabled for this session\./,
+  );
+});
+
+test('launcher-enabled Pi providers pass enablement through their production Direct adapters', async (t) => {
+  const registry = createBuiltinRegistry({
+    piKeys: { deepseek: 'fixture', zai: 'fixture', 'zai-coding-cn': 'fixture' },
+    strataBaseUrl: 'http://127.0.0.1:9999/v1',
+  });
+  // Match launcher.ts: expand MULTI_ENABLED_PROVIDERS before passing it to the gateway.
+  const enabledProviders = providerSelection('pi');
+  assert.deepEqual(enabledProviders, ['deepseek', 'zai', 'zai-coding-cn', 'strata']);
+  const call = await gateway(t, () => assert.fail('Token counting must not open upstream'), {
+    registry,
+    enabledProviders,
+  });
+  for (const [provider, modelId] of [
+    ['deepseek', 'deepseek-v4-pro'],
+    ['zai', 'glm-5.3'],
+    ['zai-coding-cn', 'glm-5.3'],
+    ['strata', 'qwen3.8-flash-next'],
+  ]) {
+    const response = await call(
+      { model: `multi/${provider}/${modelId}`, messages },
+      {},
+      '/v1/messages/count_tokens',
+    );
+    const result = await response.json();
+    assert.equal(response.status, 200, `${provider}: ${JSON.stringify(result)}`);
+    assert.ok(
+      typeof result === 'object' &&
+        result !== null &&
+        'input_tokens' in result &&
+        typeof result.input_tokens === 'number' &&
+        result.input_tokens > 0,
+      `${provider} reached its Direct token counter`,
+    );
+  }
+});
+
+test('a DeepSeek route without the Pi plugin reports the missing plugin before upstream', async (t) => {
+  let fetchCalls = 0;
+  const call = await gateway(
+    t,
+    async () => {
+      fetchCalls += 1;
+      return assert.fail('Disabled Pi providers must not reach upstream');
+    },
+    { enabledProviders: ['openai'] },
+  );
+  const response = await call({
+    model: 'multi/deepseek/deepseek-v4-pro',
+    messages: [{ role: 'user', content: 'hello' }],
+  });
+  const text = await response.text();
+  assert.equal(response.status, 400);
+  assert.match(text, /multi-pi plugin \(provider deepseek\) is not enabled for this session\./);
+  assert.equal(fetchCalls, 0);
 });
 
 test('unknown provider models are rejected before any upstream call', async (t) => {
@@ -1541,7 +1601,7 @@ test('DeepSeek 403 adds credential help without exposing upstream details', asyn
         status: 403,
         headers: { 'content-type': 'text/plain' },
       }),
-    { registry },
+    { registry, enabledProviders: providerSelection('pi') },
   );
   const response = await call({
     model: 'multi/deepseek/deepseek-v4-pro',

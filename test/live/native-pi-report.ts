@@ -7,6 +7,7 @@ interface ReportOptions {
   maxUpstreamRequests: number;
   provider?: string;
   model: string;
+  effort?: string;
   scenarios: Record<string, string>;
   scan: (value: string, label: string) => string;
   write: (value: string) => Promise<void>;
@@ -24,6 +25,7 @@ export function createPiLiveReport(options: ReportOptions) {
         status,
         provider,
         model: options.model,
+        ...(options.effort === undefined ? {} : { effort: options.effort }),
         upstreamRequests: upstreamRequests(),
         maxUpstreamRequests: options.maxUpstreamRequests,
         scenarios: options.scenarios,

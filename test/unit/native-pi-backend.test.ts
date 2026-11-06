@@ -204,6 +204,9 @@ test('Strata backend confines imports, avoids home Pi files, and sends the curat
       const fetch = async (input, init) => {
         target = input instanceof Request ? input.url : String(input);
         headers = new Headers(init?.headers);
+        if (init?.method === 'GET') {
+          return new Response(JSON.stringify({ data: [{ id: 'unsloth-ud-iq4_xs' }] }), { status: 200 });
+        }
         sentBody = JSON.parse(String(init?.body));
         return new Response([
           'data: ' + JSON.stringify({ choices: [{ delta: { role: 'assistant', content: 'ok' }, finish_reason: null }] }) + '\\n\\n',
@@ -221,6 +224,7 @@ test('Strata backend confines imports, avoids home Pi files, and sends the curat
       if (reads.length) throw new Error('Unexpected Pi file reads: ' + reads.join(','));
       if (new URL(target).origin !== 'https://strata.fake.invalid') throw new Error('wrong origin ' + target);
       if (headers.get('authorization') !== 'Bearer fake-strata-key') throw new Error('wrong authorization');
+      if (sentBody.model !== 'unsloth-ud-iq4_xs') throw new Error('wrong model ' + JSON.stringify(sentBody));
       if (sentBody.max_tokens !== 32000) throw new Error('wrong max_tokens ' + JSON.stringify(sentBody));
       if ('reasoning_effort' in sentBody || 'thinking' in sentBody) throw new Error('effort leaked');
       if (sentBody.messages.some(message => message.role === 'developer')) throw new Error('developer role leaked');
@@ -311,6 +315,11 @@ test('Strata launch binding drives offline SSE through the real backend and stre
     const opened = await prepared.open(new AbortController().signal, async (url, init) => {
       target = String(url);
       authorization = new Headers(init?.headers).get('authorization') ?? '';
+      if (init?.method === 'GET') {
+        return new Response(JSON.stringify({ data: [{ id: 'unsloth-ud-iq4_xs' }] }), {
+          status: 200,
+        });
+      }
       sentBody = JSON.parse(String(init?.body));
       const events = [
         ...(reasoning
@@ -363,7 +372,11 @@ test('Strata launch binding drives offline SSE through the real backend and stre
     assert.equal(opened.ok, true);
     assert.equal(new URL(target).origin, new URL(baseUrl).origin);
     assert.equal(authorization, `Bearer ${expectedKey}`);
+    assert.equal(sentBody.model, 'unsloth-ud-iq4_xs');
     assert.equal(sentBody.max_tokens, 1234);
+    const requestEvent = prepared.requestEvent('offline-agent');
+    assert.equal(requestEvent.route, 'strata-request');
+    assert.equal(requestEvent.model, 'multi/strata/qwen3.8-flash-next');
     assert.equal('reasoning_effort' in sentBody, false);
     assert.equal('thinking' in sentBody, false);
     const messages = sentBody.messages as Array<{ role: string; content: string }>;
@@ -401,6 +414,8 @@ test('Strata launch binding drives offline SSE through the real backend and stre
         () => {},
       );
       assert.equal(result.stop_reason, 'tool_use');
+      assert.equal(result.model, 'multi/strata/qwen3.8-flash-next');
+      assert.equal(result.multi_usage?.model, 'multi/strata/qwen3.8-flash-next');
       assert(
         result.content.some((block) => block.type === 'text' && block.text === 'Forecast ready.'),
       );
@@ -434,6 +449,7 @@ test('Strata launch binding drives offline SSE through the real backend and stre
 test('Strata transport errors redact key, userinfo and query secrets', async () => {
   const canary = 'fake-key-secret userinfo-secret password-secret query-secret';
   for (const status of [undefined, 401]) {
+    let chatCalls = 0;
     await assert.rejects(
       openPiStream({
         providerId: 'strata',
@@ -442,7 +458,13 @@ test('Strata transport errors redact key, userinfo and query secrets', async () 
         apiKey: 'fake-key-secret',
         label: 'Strata',
         context,
-        fetch: async () => {
+        fetch: async (_input, init) => {
+          if (init?.method === 'GET') {
+            return new Response(JSON.stringify({ data: [{ id: 'unsloth-ud-iq4_xs' }] }), {
+              status: 200,
+            });
+          }
+          chatCalls += 1;
           if (status === undefined) {
             throw new Error(canary);
           }
@@ -461,6 +483,7 @@ test('Strata transport errors redact key, userinfo and query secrets', async () 
         return true;
       },
     );
+    assert.equal(chatCalls, 1, 'chat request must be reached after successful /models lookup');
   }
 });
 

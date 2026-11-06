@@ -284,7 +284,10 @@ test('provider matrix: a disabled or unknown provider model fails before any pro
   const { call, hits } = await startMatrix(t, { enabled: ['openai'] });
   const refused = await call(ask('multi/cursor/auto'));
   assert.equal(refused.status, 400);
-  assert.match(await refused.text(), /provider plugin is not enabled/);
+  assert.match(
+    await refused.text(),
+    /multi-cursor plugin \(provider cursor\) is not enabled for this session\./,
+  );
   const unknown = await call(ask('multi/nonexistent/model'));
   assert.equal(unknown.status, 400);
   await unknown.text();

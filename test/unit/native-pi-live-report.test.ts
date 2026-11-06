@@ -73,6 +73,7 @@ test('Pi live successful report shares event accounting and retains usage', asyn
     events,
     maxUpstreamRequests: 2,
     model: 'deepseek-flash',
+    effort: 'high',
     scenarios,
     scan: (value) => value,
     write: async (value) => {
@@ -91,6 +92,7 @@ test('Pi live successful report shares event accounting and retains usage', asyn
     status: 'passed',
     provider: 'deepseek',
     model: 'deepseek-flash',
+    effort: 'high',
     upstreamRequests: 1,
     maxUpstreamRequests: 2,
     scenarios: { tool: 'passed' },

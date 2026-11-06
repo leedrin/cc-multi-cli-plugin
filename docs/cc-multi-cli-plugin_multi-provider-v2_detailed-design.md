@@ -678,7 +678,9 @@ Strata 是维护者写在本地 Pi 配置里的自定义 provider，不在 `pi-a
 | 接入方式 | `createProvider({ id: 'strata', models, api: openAICompletionsApi(), auth })`，之后复用 §12 和 §13。每次请求的选项与 §12.7 相同（显式 `apiKey`、`cacheRetention`） |
 | 地址 | `MULTI_STRATA_BASE_URL`，设置后才启用这个 provider。只接受 `https://` 或回环地址的 `http://`，其他形式启动时报错 |
 | 密钥 | 可选的 `STRATA_API_KEY`，按 §10 读取后从环境中删除。回环地址未设时发送占位值 `local`；非回环地址必须设置，否则启动时报错 |
-| 模型事实 | `catalog.ts` 手写一行，取值见上表。Multi 运行时不从 Pi 配置同步，配置改了要手动改这一行 |
+| 模型事实 | `catalog.ts` 手写一行，对外固定为 `qwen3.8-flash-next`。Multi 运行时不从 Pi 配置同步 |
+| 上游模型解析 | 每次打开请求时，使用对话相同的 bearer 认证 GET `${MULTI_STRATA_BASE_URL}/models`，超时上限 5 秒；列表含 `qwen3.8-flash-next` 时优先使用它，否则仅当列表恰有一个模型时使用其 `id`。空列表、多模型、格式错误、HTTP/网络失败或超时均明确失败并报告模型数量/不可用原因；错误不得包含密钥或 URL userinfo。请求间不缓存，因为服务当前加载的量化模型名可能变化 |
+| 模型身份 | 解析出的 ID 只用于上游请求体的 `model`；picker、路由、用量和报告仍以 `qwen3.8-flash-next` 为准 |
 | API 限制 | 是 `openai-completions`，符合决定 D-K，不增加额外的适配器核对 |
 
 **effort：** 配置没有声明 `reasoning`，所以 Strata 模型不声明 effort，也没有 `defaultEffort`。请求带 `output_config.effort` 时直接丢弃，不向上游发送 reasoning effort，并在响应中提示一次已忽略 effort（§12.4）。S4 的 2.1.318 干净配置补验对 `multi/strata/qwen3.8-flash-next` 观察到 `high`，仅限 §18.1 所列启动条件，不外推所有非 reasoning 模型。

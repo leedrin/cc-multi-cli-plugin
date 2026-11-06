@@ -6,6 +6,9 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for current direction and
 
 ## Unreleased
 
+- **Identify disabled provider plugins in gateway errors.** Rejections name the owning plugin and provider without sending a request upstream.
+- **Resolve Strata's changing upstream model name per request.** The stable `qwen3.8-flash-next` picker identity maps to the matching listed model or the sole loaded model; GLM Coding CN's opt-in live check uses and reports `high` effort.
+
 - Document DeepSeek, GLM, and Strata setup, model selection, execution limits, usage, and measured Pi dependency disk use in [docs/pi.md](docs/pi.md). Strata is enabled by `MULTI_STRATA_BASE_URL`; its offline-only verification does not block the milestone.
 
 - **Isolate provider keys during startup probing.** Claude plugin-list probes no longer receive provider API keys in their child-process environment.
