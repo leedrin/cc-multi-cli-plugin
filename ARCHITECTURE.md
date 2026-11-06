@@ -31,7 +31,7 @@ Claude Code session (/model, workers, prompts)
              Node gateway
         /          |           \
    OpenAI       Zen / DeepSeek       Cursor / Antigravity / Grok
- direct API   direct API (Pi for DeepSeek)   SDK or real CLI
+ direct API   direct API (Pi for DeepSeek and GLM)   SDK or real CLI
  Claude loop  Claude loop            provider loop
 ```
 
@@ -71,13 +71,13 @@ Launcher iteration over `registry.list()` for discovery and activation is planne
 
 ### Direct execution
 
-OpenAI, Zen, and DeepSeek are declared as direct providers with `DirectProviderAdapter` values containing `signaturePrefixes` and `prepare` (`plugins/multi-openai/src/provider.ts:71-102`, `plugins/multi-zen/src/provider.ts:36-77`, `plugins/multi-pi/src/provider.ts:31-51`, and the adapter contract in `plugins/multi-core/src/gateway/provider-registry.ts:66-81`). DeepSeek uses Pi's lazily loaded DeepSeek backend; its model catalog and Direct request preparation stay in `plugins/multi-pi/`.
+OpenAI, Zen, DeepSeek, and GLM are declared as direct providers with `DirectProviderAdapter` values containing `signaturePrefixes` and `prepare` (`plugins/multi-openai/src/provider.ts:71-102`, `plugins/multi-zen/src/provider.ts:36-77`, `plugins/multi-pi/src/provider.ts:31-51`, and the adapter contract in `plugins/multi-core/src/gateway/provider-registry.ts:66-81`). DeepSeek and GLM use Pi's lazily loaded provider backends; their model catalogs and Direct request preparation stay in `plugins/multi-pi/`.
 
 Each `prepare` call creates a `PreparedRequest`; its `open(signal, fetchImpl)` method is the single operation that opens the upstream request (`plugins/multi-core/src/gateway/provider-request.ts:83-98`, `plugins/multi-openai/src/gateway-request.ts:64-110`, and `plugins/multi-zen/src/gateway-request.ts:40-77`).
 
 The static descriptors' `prepare` functions do not read `process.env` per request; OpenAI computes its default auth-file path once at module load from `process.env` and closes over `defaultAuthFile` (`plugins/multi-openai/src/provider.ts:13-14,69-101`).
 
-The unbound Zen static descriptor's `prepare` always throws the original `zenUnavailable` message, while bound descriptors use credentials supplied when binding (`plugins/multi-zen/src/provider.ts:71-93`). DeepSeek likewise binds its environment-sourced credential into the provider descriptor; discovery loads the Pi backend only when that credential is present (`plugins/multi-pi/src/provider.ts:13-22,57-70`).
+The unbound Zen static descriptor's `prepare` always throws the original `zenUnavailable` message, while bound descriptors use credentials supplied when binding (`plugins/multi-zen/src/provider.ts:71-93`). Pi providers likewise bind their environment-sourced credentials into provider descriptors; discovery loads each Pi backend only when its corresponding credential is present (`plugins/multi-pi/src/provider.ts:13-22,57-70`).
 
 `createBuiltinRegistry` passes `authFile` and `zenKey` into `registerBuiltinProviders`, which binds OpenAI and Zen through `bindOpenAIProvider` and `bindZenProvider` (`plugins/multi-core/src/gateway/builtin-providers.ts:16-42`).
 
@@ -144,6 +144,7 @@ the session's `/effort`, validated by the provider.
 | OpenAI | Claude Code tools and loop | OpenAI account reviewer | Gateway and provider reasoning state | Codex login |
 | Zen | Claude Code tools and loop | No reviewer; Auto runs unreviewed | Gateway and Zen reasoning/cache state | Zen API key |
 | DeepSeek | Claude Code tools and loop; Pi-backed Direct API | No reviewer; Auto runs unreviewed | Gateway and Pi translation state | `DEEPSEEK_API_KEY` |
+| Z.AI and Z.AI Coding (CN) | Claude Code tools and loop; Pi-backed Direct API | No reviewer; Auto runs unreviewed | Gateway and Pi translation state | `ZAI_API_KEY`, `ZAI_CODING_CN_API_KEY` |
 | Cursor | Cursor SDK loop | Cursor native review | Cursor SDK, scoped by run | Cursor SDK login |
 | Antigravity | `agy` CLI loop | No reviewer | Antigravity native history and cache | `agy` login |
 | Grok | `grok` CLI loop | No reviewer | Grok native sessions on disk | Grok Build account login |

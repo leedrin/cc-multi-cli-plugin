@@ -14,7 +14,7 @@
 - OpenAI: the official Codex CLI (`codex`) and a ChatGPT login.
 - Cursor: the official Cursor SDK login. No separate Cursor CLI is required.
 - OpenCode Zen: a Zen API key in OpenCode's auth store or `OPENCODE_API_KEY`.
-- DeepSeek: `DEEPSEEK_API_KEY` in the environment of the terminal launching Multi; see [DeepSeek via Pi](pi.md).
+- DeepSeek and GLM: provider-specific API keys in the environment of the terminal launching Multi; see [DeepSeek and GLM via Pi](pi.md).
 - Antigravity: the official `agy` CLI and its native login.
 - Grok: the official Grok Build CLI (`grok`) and its account login.
 
@@ -64,7 +64,7 @@ that name; re-run with `--command claude-multi` to restore the default. Setting
 `MULTI_MODELS` in the environment overrides the saved model selection for one
 launch. Model IDs are listed in each provider's documentation.
 
-The default picker shows four OpenAI, three Cursor, five Zen, and two DeepSeek models when those
+The default picker shows four OpenAI, three Cursor, five Zen, two DeepSeek, and four GLM models when those
 providers are connected. A model absent from these defaults can be selected with
 its full ID using `--models`; the full connected catalog remains available for
 explicit selection. Use `--cursor-models` or `--zen-models` to inspect IDs. To add
@@ -74,7 +74,7 @@ saved selection, this extends the curated defaults. Re-running setup without
 existing installations with no saved selection keep the curated defaults.
 
 Each connected provider gets exactly one Agent-tool worker type (`multi-openai`,
-`multi-zen`, `multi-deepseek`, `multi-cursor`, `multi-antigravity`, `multi-grok`), and a type's
+`multi-zen`, `multi-deepseek`, `multi-zai`, `multi-zai-coding-cn`, `multi-cursor`, `multi-antigravity`, `multi-grok`), and a type's
 models are exactly its provider's rows in this selection: the Agent tool's
 `model` parameter names one of them, as a short id (`kimi-k3`) or the full
 `multi/zen/kimi-k3` id. A model absent from the selection is refused when a

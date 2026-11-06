@@ -12,7 +12,7 @@
 [![Linux · macOS · Windows](https://img.shields.io/badge/platforms-Linux_%C2%B7_macOS_%C2%B7_Windows-555)](docs/platform-support.md)
 [![Stars](https://img.shields.io/github/stars/greenpolo/cc-multi-cli-plugin?style=social)](https://github.com/greenpolo/cc-multi-cli-plugin/stargazers)
 
-Multi brings external models and coding harnesses into one Claude Code session through the `/model` picker and provider workers started from the Agent tool, with each provider's own login and permissions. Providers are OpenAI (ChatGPT via Codex login), Cursor (official SDK), OpenCode Zen (API key), DeepSeek (API key via Pi), Antigravity (official CLI), and Grok (official Grok Build CLI).
+Multi brings external models and coding harnesses into one Claude Code session through the `/model` picker and provider workers started from the Agent tool, with each provider's own login and permissions. Providers are OpenAI (ChatGPT via Codex login), Cursor (official SDK), OpenCode Zen (API key), DeepSeek and GLM (API keys via Pi), Antigravity (official CLI), and Grok (official Grok Build CLI).
 
 [Quick start](#install) · [Providers](#providers) · [Documentation](#documentation) · [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
 
@@ -53,7 +53,7 @@ Install any subset; each provider pulls in the shared `multi-core` plugin. Open 
 | `multi-openai` | `/multi-openai:login` | [ChatGPT models through Codex](docs/openai.md) |
 | `multi-cursor` | `/multi-cursor:login` | [Official Cursor SDK models and workers](docs/cursor.md) |
 | `multi-zen` | `/multi-zen:connect` | [OpenCode Zen models with an API key](docs/zen.md) |
-| `multi-pi` | Environment setup | [DeepSeek models via Pi](docs/pi.md) |
+| `multi-pi` | Environment setup | [DeepSeek and GLM models via Pi](docs/pi.md) |
 | `multi-antigravity` | `/multi-antigravity:connect` | [Antigravity models and workers through `agy`](docs/antigravity.md) |
 | `multi-grok` | `/multi-grok:login` | [Grok models and workers through Grok Build](docs/grok.md) |
 
@@ -88,7 +88,7 @@ Linux, macOS, and Windows have platform-specific implementations and a CI matrix
 | [Installation and account setup](docs/installation.md) | [Permissions and review](docs/permissions.md) |
 | [OpenAI](docs/openai.md) · [Cursor](docs/cursor.md) | [Architecture and execution flow](ARCHITECTURE.md) |
 | [Claude Mods reference](docs/claude-mods.md) | Required integration boundary for Claude Code UI and extensibility |
-| [OpenCode Zen](docs/zen.md) · [DeepSeek via Pi](docs/pi.md) · [Antigravity](docs/antigravity.md) · [Grok](docs/grok.md) | [Platform support and verification](docs/platform-support.md) |
+| [OpenCode Zen](docs/zen.md) · [DeepSeek and GLM via Pi](docs/pi.md) · [Antigravity](docs/antigravity.md) · [Grok](docs/grok.md) | [Platform support and verification](docs/platform-support.md) |
 
 <details>
 <summary>Does this change my normal Claude setup?</summary>

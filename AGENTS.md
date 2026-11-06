@@ -36,7 +36,7 @@ Claude Code function-hook UI and extensibility rules live in
 | `plugins/multi-zen/src/provider.ts` | Zen descriptor and typed `discoverZen(context, deps?)`; provider-specific API-key authentication, catalogs, request construction, and translations live in the Zen plugin. |
 | `plugins/multi-antigravity/src/provider.ts` | Antigravity descriptor and typed `discoverAntigravity(context, deps?)`; provider-specific `agy` CLI harness, models, hooks, requests, and permissions live in the Antigravity plugin. |
 | `plugins/multi-grok/src/provider.ts` | Grok descriptor and typed `discoverGrok(context, deps?)`; provider-specific Grok Build CLI harness, models, requests, permissions, and login state live in the Grok plugin. |
-| `plugins/multi-pi/src/provider.ts` | DeepSeek descriptor, lazy Pi backend discovery, environment credential binding, and Direct request preparation. |
+| `plugins/multi-pi/src/provider.ts` | DeepSeek and GLM descriptors, lazy Pi backend discovery, environment credential binding, and Direct request preparation. |
 | `test/unit/` | Offline unit tests for gateway and provider behavior. |
 | `test/live/` | Opt-in checks against native CLIs and provider services. |
 | `scripts/` | Development utilities: banner generation, release versioning (`versioning.ts`), and the release CLIs. |
@@ -56,7 +56,7 @@ changes. Provider limitations are not permanent bans on requested new features;
 changes to those boundaries need corresponding implementation and verification.
 
 - Claude's permission mode controls every provider at prompt boundaries.
-- Each provider owns its login, reviewer, execution state, and credentials. Pi-backed DeepSeek credentials come from `DEEPSEEK_API_KEY`; do not infer credentials from local Pi configuration.
+- Each provider owns its login, reviewer, execution state, and credentials. Pi-backed DeepSeek and GLM credentials come from their provider-specific environment variables; do not infer credentials from local Pi configuration.
 - Fail explicitly on unsupported modes, unknown workers, or ambiguous ownership.
 - A provider without a reviewer runs auto mode unreviewed and says so; plan mode still refuses actions.
 - Never replay external tool events as executable Claude tools.
