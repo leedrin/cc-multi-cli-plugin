@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { antigravityEnvironment, runAntigravity } from '../../plugins/multi-antigravity/src/cli.ts';
 import {
   BUILTIN_PROVIDERS,
   createBuiltinRegistry,
 } from '../../plugins/multi-core/src/gateway/builtin-providers.ts';
+import { nativeEnvironment } from '../../plugins/multi-core/src/gateway/harness-process.ts';
+import { takeProviderCredentials } from '../../plugins/multi-core/src/gateway/provider-credentials.ts';
 import type {
   ProviderDescriptor,
   ProviderDiscoveryContext,
@@ -18,12 +22,14 @@ import {
 import {
   createLaunchRegistry,
   discoverLaunchProviders,
+  gatewayEnvironment,
   genericActiveProviders,
   launcherRuntime,
   main,
   pickerSettings,
 } from '../../plugins/multi-core/src/launcher.ts';
 import { discoverEnabledProviders } from '../../plugins/multi-core/src/provider-discovery.ts';
+import { grokEnvironment, runGrok } from '../../plugins/multi-grok/src/cli.ts';
 import { removeTemporary } from '../temporary.ts';
 
 function context(
@@ -586,6 +592,218 @@ test('main scrubs the real host before help and every startup probe, forwarding 
     assert.deepEqual(reached, ['help', 'version', 'inventory', 'anthropic', 'discovery']);
   } finally {
     restore();
+  }
+});
+
+test('Pi keys are scrubbed before Claude and provider harness spawn boundaries', async () => {
+  const names = ['DEEPSEEK_API_KEY', 'ZAI_API_KEY', 'ZAI_CODING_CN_API_KEY', 'STRATA_API_KEY'];
+  const registry = createBuiltinRegistry();
+  const credentialNames = registry.list().flatMap(({ credentialEnv }) => credentialEnv ?? []);
+  const touchedNames = new Set([
+    ...credentialNames,
+    ...Object.keys(process.env).filter((key) =>
+      credentialNames.some((name) =>
+        process.platform === 'win32' ? key.toLowerCase() === name.toLowerCase() : key === name,
+      ),
+    ),
+  ]);
+  const before = new Map([...touchedNames].map((name) => [name, process.env[name]]));
+  try {
+    for (const name of names) {
+      process.env[name] = `test-only-${name}`;
+    }
+    process.env.OPENCODE_API_KEY = 'test-only-zen-key';
+    const credentials = takeProviderCredentials(process.env, registry.list(), {
+      platform: process.platform,
+    });
+    assert.deepEqual([...credentials.keys()].sort(), [...names, 'OPENCODE_API_KEY'].sort());
+    assert.equal(credentials.get('OPENCODE_API_KEY') === 'test-only-zen-key', true);
+    assert.equal(process.env.OPENCODE_API_KEY, undefined);
+    assert.deepEqual(
+      Object.fromEntries(names.map((name) => [name, typeof process.env[name] === 'string'])),
+      Object.fromEntries(names.map((name) => [name, false])),
+    );
+    const claudeEnv = gatewayEnvironment(43210, 'test-only-token', false, registry);
+    const bashInheritedEnv = nativeEnvironment({ overrides: claudeEnv });
+    const fixture = `
+      const names = ${JSON.stringify(names)};
+      process.stdout.write(JSON.stringify(Object.fromEntries(names.map(name => [name, typeof process.env[name] === 'string']))));
+    `;
+    const assertFixture = (env: NodeJS.ProcessEnv) => {
+      const child = spawnSync(process.execPath, ['-e', fixture], {
+        encoding: 'utf8',
+        env,
+        timeout: 10000,
+      });
+      assert.equal(child.status, 0, child.stderr);
+      assert.deepEqual(
+        JSON.parse(child.stdout),
+        Object.fromEntries(names.map((name) => [name, false])),
+      );
+    };
+    assertFixture(claudeEnv);
+    assertFixture(bashInheritedEnv);
+
+    const captureSpawn = (
+      _command: string,
+      _args: readonly string[],
+      options?: { env?: NodeJS.ProcessEnv },
+    ) => {
+      assertFixture(options?.env ?? {});
+      throw new Error('captured provider spawn environment');
+    };
+    await assert.rejects(
+      runAntigravity({
+        cwd: os.tmpdir(),
+        prompt: 'fixture',
+        signal: new AbortController().signal,
+        env: claudeEnv,
+        executable: process.execPath,
+        spawn: captureSpawn,
+      }),
+      /captured provider spawn environment/,
+    );
+    assertFixture(antigravityEnvironment(claudeEnv));
+
+    await assert.rejects(
+      runGrok({
+        cwd: os.tmpdir(),
+        prompt: 'fixture',
+        signal: new AbortController().signal,
+        env: claudeEnv,
+        executable: process.execPath,
+        spawn: captureSpawn,
+      }),
+      /captured provider spawn environment/,
+    );
+    assertFixture(grokEnvironment(claudeEnv));
+
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'launcher-pi-spawn-'));
+    try {
+      const launcherUrl = new URL('../../plugins/multi-core/src/launcher.ts', import.meta.url).href;
+      const cursorHarnessUrl = new URL('../../plugins/multi-cursor/src/harness.ts', import.meta.url)
+        .href;
+      const cursorModelsUrl = new URL('../../plugins/multi-cursor/src/models.ts', import.meta.url)
+        .href;
+      const fixture = `
+        const { spawnSync } = await import('node:child_process');
+        const names = ${JSON.stringify(names)};
+        const nestedSource = 'process.stdout.write(JSON.stringify(Object.fromEntries(JSON.parse(process.argv[1]).map(name => [name, typeof process.env[name] === "string"]))))';
+        const nested = spawnSync(process.execPath, ['-e', nestedSource, JSON.stringify(names)], { encoding: 'utf8', env: process.env });
+        process.stdout.write(JSON.stringify({
+          scrubbedBeforeSpawn: process.env.T049_SCRUBBED_BEFORE_SPAWN === 'true',
+          claude: Object.fromEntries(names.map(name => [name, typeof process.env[name] === 'string'])),
+          bash: JSON.parse(nested.stdout),
+        }));
+      `;
+      const script = `
+        import assert from 'node:assert/strict';
+        import { createRequire, syncBuiltinESMExports } from 'node:module';
+        const require = createRequire(import.meta.url);
+        const childProcess = require('node:child_process');
+        const names = ${JSON.stringify(names)};
+        const fixture = ${JSON.stringify(fixture)};
+        const realSpawn = childProcess.spawn;
+        childProcess.spawn = (_command, _args, options = {}) => {
+          const scrubbed = names.every(name => typeof process.env[name] !== 'string');
+          return realSpawn(process.execPath, ['-e', fixture], {
+            ...options,
+            env: { ...options.env, T049_SCRUBBED_BEFORE_SPAWN: String(scrubbed) },
+          });
+        };
+        syncBuiltinESMExports();
+        for (const name of names) process.env[name] = 'test-only-' + name;
+        process.env.MULTI_REAL_CLAUDE = process.execPath;
+        const { main } = await import(${JSON.stringify(launcherUrl)});
+        const { CursorHarness } = await import(${JSON.stringify(cursorHarnessUrl)});
+        const { cursorModelOptions } = await import(${JSON.stringify(cursorModelsUrl)});
+        const cleanSnapshot = Object.fromEntries(names.map(name => [name, false]));
+        const snapshot = () => Object.fromEntries(names.map(name => [name, typeof process.env[name] === 'string']));
+        await main({
+          args: [],
+          hooks: {
+            versionProbe: async () => {},
+            pluginInventory: async () => ({ permissions: {}, multiCoreEnabled: false }),
+            anthropicAuth: async () => true,
+            discovery: async () => {
+              assert.deepEqual(snapshot(), cleanSnapshot, 'Pi credentials reached Cursor discovery before production scrub');
+              const models = cursorModelOptions([{ id: 'test-model', displayName: 'Test Model' }]);
+              let sdkCalls = 0;
+              const harness = new CursorHarness(models, {
+                cwd: process.cwd(),
+                stateDirectory: process.cwd() + '/cursor-state',
+                createAgent: async () => {
+                  assert.deepEqual(snapshot(), cleanSnapshot, 'Pi credentials reached Cursor SDK create');
+                  sdkCalls++;
+                  throw new Error('captured Cursor SDK environment');
+                },
+                resumeAgent: async () => { throw new Error('unexpected Cursor SDK resume'); },
+              });
+              try {
+                await assert.rejects(
+                  harness.handle(
+                    { model: models[0].model, messages: [{ role: 'user', content: 'fixture' }] },
+                    'main', new AbortController().signal, undefined, { permissionMode: 'auto' },
+                  ),
+                  /captured Cursor SDK environment/,
+                );
+                assert.equal(sdkCalls, 1, 'production harness must reach injected SDK create');
+              } finally {
+                await harness.close();
+              }
+              return {
+                codexSignedIn: false,
+                openaiReview: false,
+                cursorModels: [],
+                antigravityModels: [],
+                grokModels: [],
+                genericModels: {},
+                piKeys: {},
+                availableProviderIds: [],
+              };
+            },
+          },
+        });
+      `;
+      const inheritedEnv = Object.fromEntries(
+        ['PATH', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP'].flatMap((key) =>
+          process.env[key] === undefined ? [] : [[key, process.env[key] as string]],
+        ),
+      );
+      const launched = spawnSync(
+        process.execPath,
+        ['--no-warnings', '--input-type=module', '-e', script],
+        {
+          cwd: directory,
+          encoding: 'utf8',
+          timeout: 15000,
+          env: { ...inheritedEnv, HOME: directory, USERPROFILE: directory },
+        },
+      );
+      assert.equal(launched.status, 0, `${launched.stdout}\n${launched.stderr}`);
+      const output = JSON.parse(launched.stdout.trim()) as {
+        scrubbedBeforeSpawn: boolean;
+        claude: Record<string, boolean>;
+        bash: Record<string, boolean>;
+      };
+      assert.equal(output.scrubbedBeforeSpawn, true);
+      assert.deepEqual(output.claude, Object.fromEntries(names.map((name) => [name, false])));
+      assert.deepEqual(output.bash, Object.fromEntries(names.map((name) => [name, false])));
+    } finally {
+      await removeTemporary(directory);
+    }
+  } finally {
+    for (const name of touchedNames) {
+      const value = before.get(name);
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
+  }
+  for (const name of touchedNames) {
+    assert.equal(process.env[name] === before.get(name), true, `${name} was not restored`);
   }
 });
 

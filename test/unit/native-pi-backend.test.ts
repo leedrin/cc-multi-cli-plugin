@@ -70,6 +70,73 @@ test('only ZAI key loads only the ZAI provider in a child process', () => {
   assert.doesNotMatch(result.stderr, /all\.js|deepseek\.js|zai-coding-cn\.js/);
 });
 
+test('keyless DeepSeek ignores Pi auth files under isolated HOME and USERPROFILE', async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'multi-deepseek-home-'));
+  const piDir = path.join(home, '.pi', 'agent');
+  const marker = path.join(home, 'SHOULD_NOT_RUN');
+  const payload = Buffer.from(
+    `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'ran')`,
+  ).toString('base64');
+  const command = `"${process.execPath}" -e "eval(Buffer.from('${payload}', 'base64').toString())"`;
+  await mkdir(piDir, { recursive: true });
+  await writeFile(
+    path.join(piDir, 'models.json'),
+    JSON.stringify({
+      providers: { deepseek: { apiKey: `!${command}` } },
+      canary: 'DEEPSEEK_FILE_KEY_CANARY',
+    }),
+  );
+  await writeFile(
+    path.join(piDir, 'auth.json'),
+    JSON.stringify({ deepseek: { type: 'api', key: `!${command}` } }),
+  );
+  try {
+    const script = `
+      import fs from 'node:fs';
+      import fsp from 'node:fs/promises';
+      import path from 'node:path';
+      import { syncBuiltinESMExports } from 'node:module';
+      import { fileURLToPath } from 'node:url';
+      const targets = [${JSON.stringify(path.join(piDir, 'models.json'))}, ${JSON.stringify(path.join(piDir, 'auth.json'))}].map(value => value.toLowerCase());
+      const reads = [];
+      const record = original => function(file, ...args) {
+        const name = file instanceof URL ? fileURLToPath(file) : file;
+        const resolved = typeof name === 'string' || Buffer.isBuffer(name) ? path.resolve(String(name)).toLowerCase() : '';
+        if (targets.includes(resolved)) reads.push(resolved);
+        return original.call(this, file, ...args);
+      };
+      for (const method of ['readFile', 'readFileSync', 'existsSync', 'openSync', 'open', 'createReadStream']) fs[method] = record(fs[method]);
+      fsp.readFile = record(fsp.readFile);
+      fsp.open = record(fsp.open);
+      syncBuiltinESMExports();
+      const { bindPiProviders } = await import(${JSON.stringify(new URL('../../plugins/multi-pi/src/provider.ts', import.meta.url).href)});
+      const provider = bindPiProviders().find(({ id }) => id === 'deepseek');
+      if (!provider) throw new Error('DeepSeek descriptor missing');
+      const context = { cwd: process.cwd(), env: {}, explicit: true, log: () => {} };
+      if ((await provider.availability(context)).available) throw new Error('file credential enabled DeepSeek');
+      await provider.discoverModels(context);
+      if (reads.length) throw new Error('Pi auth file reads: ' + reads.join(','));
+      process.stdout.write('KEYLESS_DEEPSEEK_UNAVAILABLE reads=0 marker=' + (fs.existsSync(${JSON.stringify(marker)}) ? 'true' : 'false'));
+    `;
+    const result = spawnSync(
+      process.execPath,
+      ['--no-warnings', '--input-type=module', '-e', script],
+      {
+        cwd: home,
+        encoding: 'utf8',
+        timeout: 10000,
+        env: { ...process.env, HOME: home, USERPROFILE: home },
+      },
+    );
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /KEYLESS_DEEPSEEK_UNAVAILABLE reads=0 marker=false/);
+    assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /DEEPSEEK_(?:FILE_KEY|AUTH)_CANARY/);
+    await assert.rejects(access(marker));
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 test('Strata backend confines imports, avoids home Pi files, and sends the curated request', async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'multi-strata-home-'));
   const piDir = path.join(home, '.pi', 'agent');

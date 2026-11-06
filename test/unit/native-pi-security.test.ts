@@ -15,26 +15,23 @@ import {
   workerCatalog,
   workerDefinitions,
 } from '../../plugins/multi-core/src/launcher.ts';
-import { PI_DEEPSEEK_MODELS } from '../../plugins/multi-pi/src/catalog.ts';
+import { PI_MODELS_BY_PROVIDER } from '../../plugins/multi-pi/src/catalog.ts';
 import { preparePiRequest } from '../../plugins/multi-pi/src/gateway-request.ts';
 import { bindPiProvider, discoverPiModels } from '../../plugins/multi-pi/src/provider.ts';
+import { type PiLiveProvider, resolvePiLiveSelection } from '../live/native-pi.ts';
 
-test('Pi live report and request model IDs stay in the production catalog', () => {
-  const source = readFileSync(new URL('../live/native-pi.ts', import.meta.url), 'utf8');
-  const models = [...source.matchAll(/model: '(?:multi\/deepseek\/)?([^']+)'/g)].map(
-    (match) => match[1],
-  );
-  assert.equal(
-    models.length,
-    2,
-    'collect both report model and request route without running live',
-  );
-  assert.equal(models[0], models[1], 'report and request must use the same model');
-  for (const id of models) {
+test('Pi live selection matches each provider catalog and feeds request and report', async () => {
+  const providers = ['deepseek', 'zai-coding-cn', 'strata'] satisfies readonly PiLiveProvider[];
+  const liveSource = readFileSync(new URL('../live/native-pi.ts', import.meta.url), 'utf8');
+  assert.match(liveSource, /model:\s*selection\.model/);
+  assert.match(liveSource, /model:\s*selection\.route/);
+  for (const provider of providers) {
+    const selection = resolvePiLiveSelection(provider);
     assert(
-      PI_DEEPSEEK_MODELS.some((model) => model.id === id),
-      `Unknown Pi live model: ${id}`,
+      PI_MODELS_BY_PROVIDER[provider].some(({ id }) => id === selection.model),
+      `${selection.model} is not in the ${provider} catalog`,
     );
+    assert.equal(selection.route, `multi/${provider}/${selection.model}`);
   }
 });
 
@@ -253,6 +250,64 @@ test('Pi full-flow security canary stays out of gateway outputs and errors', asy
   const toolFollowUpText = await toolFollowUp.text();
   assert(toolFollowUpText.length > 0, 'tool-result round-trip must be collected');
   capture('tool result round-trip', toolFollowUpText);
+
+  const malformedArgument = '{"text":"RAW_TOOL_ARGUMENT_CANARY';
+  const malformedFetch: GatewayFetch = async () =>
+    providerSse([
+      {
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'malformed-tool-id',
+                  type: 'function',
+                  function: { name: 'echo', arguments: malformedArgument },
+                },
+              ],
+            },
+            finish_reason: null,
+          },
+        ],
+      },
+      { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+      { choices: [], usage: { prompt_tokens: 12, completion_tokens: 3 } },
+    ]);
+  const malformed = await start(malformedFetch);
+  t.after(async () => {
+    malformed.server.closeAllConnections();
+    await new Promise<void>((resolve) => malformed.server.close(() => resolve()));
+  });
+  const eventStart = events.length;
+  const traceStart = traceOutput.length;
+  const stderrStart = stderrOutput.length;
+  const malformedResponse = await call(malformed.url, { ...baseBody, tools });
+  const malformedText = await malformedResponse.text();
+  assert(malformedText.length > 0, 'malformed tool response must be collected');
+  assert(!malformedText.includes('"type":"tool_use"'));
+  assert.notEqual(malformedResponse.status, 200);
+  const malformedEvents = JSON.stringify(events.slice(eventStart));
+  const malformedTrace = traceOutput.slice(traceStart).join('');
+  const malformedLogs = stderrOutput.slice(stderrStart).join('');
+  assert(malformedEvents.length > 0, 'malformed tool events must be collected');
+  assert(malformedTrace.length > 0, 'malformed tool trace must be collected');
+  const leakedForms = [
+    malformedArgument,
+    JSON.stringify(malformedArgument).slice(1, -1),
+    'RAW_TOOL_ARGUMENT_CANARY',
+  ];
+  for (const text of [malformedText, malformedEvents, malformedTrace, malformedLogs]) {
+    for (const form of leakedForms) {
+      assert(!text.includes(form), `malformed tool argument leaked as ${form}`);
+    }
+  }
+  assert(!malformedEvents.includes('"type":"tool_use"'));
+  capture('malformed tool argument response', malformedText);
+  capture(
+    'malformed tool argument events and trace',
+    `${malformedEvents}${malformedTrace}${malformedLogs}`,
+  );
 
   const streamed = await call(url, { ...baseBody, stream: true });
   const sseText = await streamed.text();

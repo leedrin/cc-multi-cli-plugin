@@ -31,8 +31,9 @@ const collect = async (
   overrides: Partial<
     Pick<PiStreamOptions, 'rememberWorkerModel' | 'usage' | 'notice' | 'label'>
   > = {},
+  capturedOutput?: Array<{ type: string; value: unknown }>,
 ) => {
-  const output: Array<{ type: string; value: unknown }> = [];
+  const output = capturedOutput ?? [];
   const first = events[0];
   assert.ok(first);
   const result = await translatePiStream(
@@ -334,17 +335,32 @@ test('Pi stream buffers complete tools, restores aliases, normalizes worker mode
   ]);
   assert.deepEqual(remembered, [['id-0', 'multi-deepseek', 'deepseek-reasoner']]);
   assert.equal(result.stop_reason, 'max_tokens');
+  const unknownToolOutput: Array<{ type: string; value: unknown }> = [];
   await assert.rejects(
-    collect([
-      event({ type: 'start', partial: base }),
-      event({
-        type: 'toolcall_end',
-        contentIndex: 0,
-        partial: base,
-        toolCall: { type: 'toolCall', id: 'bad', name: 'unknown_alias', arguments: {} },
-      }),
-    ]),
+    collect(
+      [
+        event({ type: 'start', partial: base }),
+        event({
+          type: 'toolcall_end',
+          contentIndex: 0,
+          partial: base,
+          toolCall: { type: 'toolCall', id: 'bad', name: 'unknown_alias', arguments: {} },
+        }),
+      ],
+      ['search'],
+      {},
+      unknownToolOutput,
+    ),
     (error: Error) => error.message === 'DeepSeek stream failed.',
+  );
+  assert.equal(
+    unknownToolOutput.filter(
+      ({ type, value }) =>
+        type === 'content_block_start' &&
+        (value as { content_block?: { type?: string } }).content_block?.type === 'tool_use',
+    ).length,
+    0,
+    'unknown tool aliases must never emit a tool_use block',
   );
 });
 

@@ -5,6 +5,7 @@ import type { MessagesResponse } from '../../plugins/multi-core/src/gateway/mess
 interface ReportOptions {
   events: ReadonlyArray<{ route: string }>;
   maxUpstreamRequests: number;
+  provider?: string;
   model: string;
   scenarios: Record<string, string>;
   scan: (value: string, label: string) => string;
@@ -13,14 +14,15 @@ interface ReportOptions {
 
 export function createPiLiveReport(options: ReportOptions) {
   const usage: Array<MessagesResponse['usage']> = [];
+  const provider = options.provider ?? 'deepseek';
   const upstreamRequests = () =>
-    options.events.filter(({ route }) => route === 'deepseek-request').length;
+    options.events.filter(({ route }) => route === `${provider}-request`).length;
 
   async function writeReport(status: 'passed' | '未完成'): Promise<void> {
     const value = JSON.stringify(
       {
         status,
-        provider: 'deepseek',
+        provider,
         model: options.model,
         upstreamRequests: upstreamRequests(),
         maxUpstreamRequests: options.maxUpstreamRequests,

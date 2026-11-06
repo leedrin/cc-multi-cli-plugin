@@ -36,6 +36,7 @@ import {
 import { readCodexAuth } from '../../plugins/multi-openai/src/auth.ts';
 import { openaiInstructions } from '../../plugins/multi-openai/src/instructions.ts';
 import { MODELS, OPENAI_WORKER_EFFORT } from '../../plugins/multi-openai/src/models.ts';
+import { PI_SIGNATURE_PREFIX } from '../../plugins/multi-pi/src/signature.ts';
 import { ZEN_SIGNATURE_PREFIXES } from '../../plugins/multi-zen/src/chat.ts';
 import { removeTemporary } from '../temporary.ts';
 import type { GatewayEvent, GatewayOptions } from './support/runtime.ts';
@@ -357,6 +358,67 @@ test('encrypted reasoning survives a tool round trip without a shared conversati
     ).input,
     [],
   );
+});
+
+test('switching back to Claude removes Pi reasoning through the gateway and preserves other history', async (t) => {
+  const originalHistory: RequestMessage[] = [
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'thinking',
+          thinking: 'Pi private state',
+          signature: `${PI_SIGNATURE_PREFIX}opaque`,
+        },
+        { type: 'thinking', thinking: 'Claude state', signature: 'claude-signature' },
+        { type: 'tool_use', id: 'call_read', name: 'Read', input: { file_path: 'fixture' } },
+      ],
+    },
+    {
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: 'call_read', content: 'fixture nonce' }],
+    },
+  ];
+  const originalHistorySnapshot = structuredClone(originalHistory);
+  let forwarded: MessagesRequest | undefined;
+  const registry = createBuiltinRegistry({ deepseekKey: 'fake-deepseek-key' });
+  const call = await gateway(
+    t,
+    async (_url, options) => {
+      forwarded = JSON.parse(String(options?.body)) as MessagesRequest;
+      return new Response(
+        JSON.stringify({
+          id: 'msg_claude',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude',
+          content: [],
+          stop_reason: 'end_turn',
+          stop_sequence: null,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }),
+        { status: 200 },
+      );
+    },
+    { registry },
+  );
+  const response = await call({ ...body, model: 'claude-sonnet-4-6', messages: originalHistory });
+  assert.equal(response.status, 200);
+  assert(forwarded, 'Claude request must reach the upstream fixture');
+  assert.deepEqual(forwarded.messages, [
+    {
+      role: 'assistant',
+      content: [
+        { type: 'thinking', thinking: 'Claude state', signature: 'claude-signature' },
+        { type: 'tool_use', id: 'call_read', name: 'Read', input: { file_path: 'fixture' } },
+      ],
+    },
+    {
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: 'call_read', content: 'fixture nonce' }],
+    },
+  ]);
+  assert.deepEqual(originalHistory, originalHistorySnapshot);
 });
 
 test('switching back to Claude removes OpenAI reasoning while preserving messages and tool history', async () => {

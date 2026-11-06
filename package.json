@@ -15,6 +15,8 @@
     "test:live:compaction": "node test/live/native-compaction.ts",
     "test:live:zen": "node test/live/native-zen.ts",
     "test:live:pi": "node test/live/native-pi.ts",
+    "test:live:pi:glm": "node test/live/native-pi.ts --provider zai-coding-cn",
+    "test:live:pi:strata": "node test/live/native-pi.ts --provider strata",
     "test:live:cursor": "node test/live/native-cursor-harness.ts",
     "test:live:openai-instructions": "node test/live/native-openai-instructions.ts",
     "test:live:auto-mode": "node test/live/native-auto-mode.ts",

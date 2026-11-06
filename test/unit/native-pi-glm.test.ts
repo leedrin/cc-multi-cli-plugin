@@ -315,9 +315,19 @@ for (const provider of providers) {
     if (!opened.ok) {
       throw new Error('expected Pi stream to open');
     }
+    const output: Array<{ type: string; value: unknown }> = [];
     await assert.rejects(
-      opened.translate(undefined, () => {}),
+      opened.translate(undefined, (type, value) => output.push({ type, value })),
       /stream failed/,
+    );
+    assert.equal(
+      output.filter(
+        ({ type, value }) =>
+          type === 'content_block_start' &&
+          (value as { content_block?: { type?: string } }).content_block?.type === 'tool_use',
+      ).length,
+      0,
+      'undeclared GLM tools must not emit tool_use blocks',
     );
   });
 

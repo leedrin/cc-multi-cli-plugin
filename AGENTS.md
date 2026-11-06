@@ -88,7 +88,9 @@ executable and the Mods rollout flag forced on, without provider inference. It i
 | --- | --- | --- |
 | `npm run test:live:compaction` | Claude/OpenAI compaction and resume | Claude and Codex login |
 | `npm run test:live:zen` | Zen tools, cache, and resume | Zen API key |
-| `npm run test:live:pi` | DeepSeek tools, thinking, and usage (≤10 upstream calls) | DeepSeek API key |
+| `npm run test:live:pi` | DeepSeek tools, thinking, and usage (≤10 upstream calls) | `DEEPSEEK_API_KEY` |
+| `npm run test:live:pi:glm` | GLM Coding CN tools, thinking, and usage (≤10 upstream calls) | `ZAI_CODING_CN_API_KEY` |
+| `npm run test:live:pi:strata` | Strata tools and usage (≤10 upstream calls; thinking not supported) | `MULTI_STRATA_BASE_URL`; optional `STRATA_API_KEY` on loopback |
 | `npm run test:live:cursor` | Cursor SDK tools, continuation, and disk resume | Cursor SDK login |
 | `npm run test:live:openai-instructions` | Requested planning/delegation and Plan restrictions (three-request budget) | Codex login |
 | `npm run test:live:auto-mode` | Native Auto mode | Provider login under test |
