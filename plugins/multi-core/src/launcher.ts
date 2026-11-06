@@ -48,7 +48,12 @@ import {
 import { discoverOpenAI } from '../../multi-openai/src/provider.ts';
 import { openAIUsageReader } from '../../multi-openai/src/usage-adapter.ts';
 import { filterPiModelsForProvider } from '../../multi-pi/src/catalog.ts';
-import { PI_PROVIDERS, validatedPiKey } from '../../multi-pi/src/providers.ts';
+import {
+  PI_PROVIDERS,
+  strataUrlUsesLoopback,
+  validatedPiKey,
+  validatedStrataUrl,
+} from '../../multi-pi/src/providers.ts';
 import {
   ZEN_DEFAULT_WORKER_MODEL,
   ZEN_MODELS,
@@ -151,12 +156,49 @@ function validatePiModelSelection(
 ): void {
   const hasPiKey = PI_PROVIDERS.some(
     ({ id, credentialEnv }) =>
+      id !== 'strata' &&
       enabledDescriptors.some((descriptor) => descriptor.id === id) &&
       validatedPiKey(effectiveCredentialValue(credentialEnv, env, credentials)),
   );
-  if (hasPiKey) {
+  const strataEnabled = enabledDescriptors.some(({ id }) => id === 'strata');
+  const strataUrl = strataEnabled ? validatedStrataUrl(env.MULTI_STRATA_BASE_URL) : undefined;
+  const strataKey = effectiveCredentialValue('STRATA_API_KEY', env, credentials);
+  if (strataUrl && !strataUrlUsesLoopback(strataUrl) && !validatedPiKey(strataKey)) {
+    throw new Error('Strata requires STRATA_API_KEY for a non-loopback base URL.');
+  }
+  if (hasPiKey || strataUrl) {
     filterPiModelsForProvider('deepseek', env.MULTI_PI_MODELS);
   }
+}
+
+function collectGenericModels(
+  discovered: Record<string, unknown>,
+): Record<string, readonly ModelDescriptor[]> {
+  const genericModels: Record<string, readonly ModelDescriptor[]> = {};
+  for (const { id } of PROVIDER_FACTS) {
+    if (['openai', 'zen', 'cursor', 'antigravity', 'grok'].includes(id)) {
+      continue;
+    }
+    const models = discovered[id];
+    if (Array.isArray(models)) {
+      genericModels[id] = models as ModelDescriptor[];
+    }
+  }
+  return genericModels;
+}
+
+function launchProviderAvailable(
+  id: string,
+  registry: ProviderRegistry,
+  discovered: Record<string, unknown>,
+  explicitlyAvailable: ReadonlyMap<string, boolean>,
+  genericModels: Record<string, readonly ModelDescriptor[]>,
+): boolean {
+  return Boolean(
+    registry.get(id) &&
+      Object.hasOwn(discovered, id) &&
+      (explicitlyAvailable.get(id) ?? (genericModels[id]?.length ?? 0) > 0),
+  );
 }
 
 export async function discoverLaunchProviders(
@@ -199,37 +241,23 @@ export async function discoverLaunchProviders(
   const antigravityModels = discovered.antigravity ?? [];
   const grokModels = discovered.grok ?? [];
   const zenKey = discovered.zen;
-  const genericModels: Record<string, readonly ModelDescriptor[]> = {};
-  for (const { id } of PROVIDER_FACTS) {
-    if (['openai', 'zen', 'cursor', 'antigravity', 'grok'].includes(id)) {
-      continue;
-    }
-    const models = (discovered as Record<string, unknown>)[id];
-    if (Array.isArray(models)) {
-      genericModels[id] = models as ModelDescriptor[];
-    }
-  }
-  const availableProviderIds = PROVIDER_FACTS.filter(({ id }) => {
-    if (!registry.get(id) || !Object.hasOwn(discovered, id)) {
-      return false;
-    }
-    if (id === 'openai') {
-      return codexSignedIn;
-    }
-    if (id === 'zen') {
-      return Boolean(zenKey);
-    }
-    if (id === 'cursor') {
-      return cursorModels.length > 0;
-    }
-    if (id === 'antigravity') {
-      return antigravityModels.length > 0;
-    }
-    if (id === 'grok') {
-      return grokModels.length > 0;
-    }
-    return (genericModels[id]?.length ?? 0) > 0;
-  }).map(({ id }) => id);
+  const genericModels = collectGenericModels(discovered as Record<string, unknown>);
+  const explicitlyAvailable = new Map<string, boolean>([
+    ['openai', codexSignedIn],
+    ['zen', Boolean(zenKey)],
+    ['cursor', cursorModels.length > 0],
+    ['antigravity', antigravityModels.length > 0],
+    ['grok', grokModels.length > 0],
+  ]);
+  const availableProviderIds = PROVIDER_FACTS.filter(({ id }) =>
+    launchProviderAvailable(
+      id,
+      registry,
+      discovered as Record<string, unknown>,
+      explicitlyAvailable,
+      genericModels,
+    ),
+  ).map(({ id }) => id);
   return {
     codexSignedIn,
     openaiReview: discovered.openai?.openaiReview ?? false,
@@ -249,7 +277,11 @@ export async function discoverLaunchProviders(
       ...(credentials.get('ZAI_CODING_CN_API_KEY') === undefined
         ? {}
         : { 'zai-coding-cn': credentials.get('ZAI_CODING_CN_API_KEY') }),
+      ...(credentials.get('STRATA_API_KEY') === undefined
+        ? {}
+        : { strata: credentials.get('STRATA_API_KEY') }),
     },
+    strataBaseUrl: env.MULTI_STRATA_BASE_URL,
     availableProviderIds,
   };
 }
@@ -409,6 +441,7 @@ export async function main(options: LauncherMainOptions = {}): Promise<void> {
     grokModels,
     genericModels,
     piKeys,
+    strataBaseUrl,
     availableProviderIds,
   } = discovered;
   const cursorPicker = selectedCursorOptions(cursorModels, fullCatalog);
@@ -454,7 +487,7 @@ export async function main(options: LauncherMainOptions = {}): Promise<void> {
   );
   const usageReaders = providerUsageReaders(authFile, zenKey, { cursor, antigravity, grok });
   const workers = workerCatalog(settings.modelPicker.options, grokModels);
-  const workerRegistry = createBuiltinRegistry({ authFile, zenKey, piKeys });
+  const workerRegistry = createBuiltinRegistry({ authFile, zenKey, piKeys, strataBaseUrl });
   const agents = workerDefinitions(workers, workerRegistry);
   const modBridge = new ModBridge();
   const settingsDir = await mkdtemp(path.join(os.tmpdir(), 'multi-native-settings-'));
@@ -485,6 +518,7 @@ export async function main(options: LauncherMainOptions = {}): Promise<void> {
     createLaunchRegistry,
     undefined,
     piKeys,
+    strataBaseUrl,
   );
   const receipts = new ReceiptLedger({
     file: process.env.MULTI_RECEIPTS_FILE
@@ -724,12 +758,14 @@ export function launcherRuntime(
   registryFactory: LaunchRegistryFactory = createLaunchRegistry,
   deepseekKey?: string,
   piKeys?: BuiltinProviderCredentials['piKeys'],
+  strataBaseUrl?: string,
 ): ProviderRuntime {
   const registry = registryFactory({
     authFile,
     zenKey,
     deepseekKey,
     ...(piKeys === undefined ? {} : { piKeys }),
+    ...(strataBaseUrl === undefined ? {} : { strataBaseUrl }),
   });
   const active: ActiveProvider[] = [];
   const add = (id: string, provider: Omit<ActiveProvider, 'descriptor'>) => {

@@ -3,7 +3,10 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createBuiltinRegistry } from '../../plugins/multi-core/src/gateway/builtin-providers.ts';
+import {
+  BUILTIN_PROVIDERS,
+  createBuiltinRegistry,
+} from '../../plugins/multi-core/src/gateway/builtin-providers.ts';
 import type {
   ProviderDescriptor,
   ProviderDiscoveryContext,
@@ -28,6 +31,12 @@ function context(
   log: (message: string) => void = () => {},
 ): ProviderDiscoveryContext {
   return { cwd: '.', env: {}, explicit, log };
+}
+
+function registryWithoutStrata() {
+  const registry = new ProviderRegistry();
+  registry.registerMany(BUILTIN_PROVIDERS.filter(({ id }) => id !== 'strata'));
+  return registry;
 }
 
 function genericDescriptor(
@@ -80,7 +89,7 @@ test('real launch discovery rejects invalid MULTI_PI_MODELS before generic disco
 });
 
 function offlineLaunchRegistry() {
-  const registry = createLaunchRegistry();
+  const registry = registryWithoutStrata();
   registry.register({
     id: 'strata',
     plugin: 'pi',
@@ -142,7 +151,7 @@ test('invalid MULTI_PI_MODELS rejects every effective Pi key from env or credent
           assert.match(error.message, /glm-not-real/);
           assert.match(
             error.message,
-            /Allowed IDs: deepseek-v4-pro, deepseek-flash, glm-5\.3, glm-5\.2, glm-5\.3-flash/,
+            /Allowed IDs: deepseek-v4-pro, deepseek-flash, glm-5\.3, glm-5\.2, glm-5\.3-flash, qwen3\.8-flash-next/,
           );
           assert.ok(!error.message.includes(key));
           return true;
@@ -174,7 +183,7 @@ for (const [providerId, name] of [
           assert.match(error.message, /glm-not-real/);
           assert.match(
             error.message,
-            /Allowed IDs: deepseek-v4-pro, deepseek-flash, glm-5\.3, glm-5\.2, glm-5\.3-flash/,
+            /Allowed IDs: deepseek-v4-pro, deepseek-flash, glm-5\.3, glm-5\.2, glm-5\.3-flash, qwen3\.8-flash-next/,
           );
           assert.ok(!error.message.includes(key));
           assert.ok(!error.message.includes(otherKey));
@@ -197,6 +206,68 @@ for (const [providerId, name] of [
     }
   });
 }
+
+test('Strata discovery requires a valid configured address and admits loopback without a key', async () => {
+  const noAddressEnv: NodeJS.ProcessEnv = { STRATA_API_KEY: 'fake-strata-key' };
+  const disabled = await discoverLaunchProviders(createLaunchRegistry, ['strata'], {
+    env: noAddressEnv,
+    platform: 'linux',
+  });
+  assert.equal(noAddressEnv.STRATA_API_KEY, undefined);
+  assert.deepEqual(disabled.availableProviderIds, []);
+  assert.deepEqual(disabled.genericModels.strata, []);
+
+  const localEnv: NodeJS.ProcessEnv = { MULTI_STRATA_BASE_URL: 'http://127.0.0.1:8080/v1' };
+  const local = await discoverLaunchProviders(createLaunchRegistry, ['strata'], {
+    env: localEnv,
+    platform: 'linux',
+  });
+  assert.deepEqual(local.availableProviderIds, ['strata']);
+  assert.deepEqual(
+    local.genericModels.strata?.map(({ identity }) => identity.routeId),
+    ['multi/strata/qwen3.8-flash-next'],
+  );
+
+  await assert.rejects(
+    discoverLaunchProviders(createLaunchRegistry, ['strata'], {
+      env: { MULTI_STRATA_BASE_URL: 'https://strata.fake.invalid/v1' },
+      platform: 'linux',
+    }),
+    /STRATA_API_KEY/,
+  );
+  await assert.rejects(
+    discoverLaunchProviders(createLaunchRegistry, ['strata'], {
+      env: { MULTI_STRATA_BASE_URL: 'http://strata.fake.invalid/v1' },
+      platform: 'linux',
+    }),
+    /HTTPS or HTTP on loopback/,
+  );
+});
+
+test('Strata rejects blank credentials and never falls back to another Pi provider key', async () => {
+  for (const credentials of [
+    new Map<string, string>(),
+    ...['', '  ', '\t\n'].map((key) => new Map<string, string>([['STRATA_API_KEY', key]])),
+  ]) {
+    await assert.rejects(
+      discoverLaunchProviders(createLaunchRegistry, ['strata', 'deepseek', 'zai'], {
+        env: {
+          MULTI_STRATA_BASE_URL: 'https://strata.fake.invalid/v1',
+          ...(credentials.has('STRATA_API_KEY') ? { STRATA_API_KEY: 'fake-host-strata-key' } : {}),
+          DEEPSEEK_API_KEY: 'fake-deepseek-key',
+          ZAI_API_KEY: 'fake-zai-key',
+        },
+        credentials,
+        platform: 'linux',
+      }),
+      (error: Error) => {
+        assert.equal(error.message, 'Strata requires STRATA_API_KEY for a non-loopback base URL.');
+        assert.doesNotMatch(error.message, /fake-host-strata-key|fake-deepseek-key|fake-zai-key/);
+        return true;
+      },
+    );
+  }
+});
 
 test('real launcher binds all Pi keys to their provider requests and omits providers without keys', async () => {
   const env: NodeJS.ProcessEnv = {
@@ -427,7 +498,7 @@ test('real launch registry scrubs DeepSeek only when enabled and isolates other 
     discoverModels: async () => [],
   };
   const registryFactory = () => {
-    const registry = createLaunchRegistry();
+    const registry = registryWithoutStrata();
     registry.register(otherProvider);
     return registry;
   };
@@ -566,10 +637,13 @@ test('launcher discovery and runtime share a registry factory without duplicate 
   > = [];
   const factory = (credentials?: { authFile?: string; zenKey?: string; deepseekKey?: string }) => {
     receivedCredentials.push(credentials);
-    const registry = createBuiltinRegistry(credentials);
-    if (!registry.get('strata')) {
-      registry.register(strata);
-    }
+    const registry = new ProviderRegistry();
+    registry.registerMany(
+      createBuiltinRegistry(credentials)
+        .list()
+        .filter(({ id }) => id !== 'strata'),
+    );
+    registry.register(strata);
     return registry;
   };
   assert.equal(typeof createLaunchRegistry, 'function');

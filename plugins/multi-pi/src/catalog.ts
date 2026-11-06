@@ -14,6 +14,20 @@ export interface PiCatalogModel {
   providerId?: PiProviderId;
 }
 
+const STRATA_MODELS: readonly PiCatalogModel[] = [
+  {
+    id: 'qwen3.8-flash-next',
+    name: 'Qwen 3.8 Flash Next',
+    api: 'openai-completions',
+    type: 'chat',
+    contextWindow: 196_608,
+    maxTokens: 32_768,
+    input: ['text'],
+    thinkingLevelMap: {},
+    providerId: 'strata',
+  },
+];
+
 const DEEPSEEK_MODELS: readonly PiCatalogModel[] = [
   {
     id: 'deepseek-v4-pro',
@@ -131,11 +145,22 @@ export const PI_MODELS_BY_PROVIDER: Readonly<Record<PiProviderId, readonly PiCat
   deepseek: DEEPSEEK_MODELS,
   zai: ZAI_MODELS,
   'zai-coding-cn': ZAI_CODING_CN_MODELS,
+  strata: STRATA_MODELS,
 };
 export const PI_DEEPSEEK_MODELS = PI_MODELS_BY_PROVIDER.deepseek;
 
 const EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 type PiEffort = (typeof EFFORT_ORDER)[number];
+
+function piLabel(providerId: PiProviderId | undefined): string {
+  if (providerId === 'deepseek') {
+    return 'DeepSeek';
+  }
+  if (providerId === 'strata') {
+    return 'Strata';
+  }
+  return 'GLM';
+}
 
 export interface PiEffortResolution {
   effort: PiEffort | undefined;
@@ -147,9 +172,6 @@ export function resolvePiEffort(
   requested?: string,
   options: { thinkingDisabled?: boolean } = {},
 ): PiEffortResolution {
-  if (options.thinkingDisabled) {
-    return { effort: undefined, notice: undefined };
-  }
   if (requested !== undefined && !EFFORT_ORDER.includes(requested as PiEffort)) {
     throw new Error(`Unknown effort: ${requested}`);
   }
@@ -166,6 +188,9 @@ export function resolvePiEffort(
           : `${model.id} does not support effort; ignoring ${requested}.`,
     };
   }
+  if (options.thinkingDisabled) {
+    return { effort: undefined, notice: undefined };
+  }
   if (supported.includes(target as PiEffort)) {
     return { effort: target as PiEffort, notice: undefined };
   }
@@ -180,7 +205,7 @@ export function resolvePiEffort(
     notice:
       actual === requested
         ? undefined
-        : `${model.providerId === 'deepseek' ? 'DeepSeek' : 'GLM'} ${model.id} does not support effort ${target}; using ${actual}.`,
+        : `${piLabel(model.providerId)} ${model.id} does not support effort ${target}; using ${actual}.`,
   };
 }
 
@@ -230,27 +255,29 @@ export function toPiModelDescriptors(
   models: readonly PiCatalogModel[] = PI_DEEPSEEK_MODELS,
   providerId: PiProviderId = 'deepseek',
 ): readonly ModelDescriptor[] {
-  return models.map((model) => ({
-    identity: {
-      providerId,
-      modelId: model.id,
-      routeId: `multi/${providerId}/${encodeURIComponent(model.id)}`,
-      oneMillionContext: false,
-    },
-    label: model.name,
-    protocol: 'openai-chat',
-    contextWindow: model.contextWindow,
-    maxOutputTokens: model.maxTokens,
-    capabilities: {
-      text: true,
-      streaming: true,
-      tools: true,
-      reasoning: true,
-      images: model.input.includes('image'),
-    },
-    reasoning: {
-      native: true,
-      efforts: EFFORT_ORDER.filter((effort) => typeof model.thinkingLevelMap[effort] === 'string'),
-    },
-  }));
+  return models.map((model) => {
+    const efforts = EFFORT_ORDER.filter(
+      (effort) => typeof model.thinkingLevelMap[effort] === 'string',
+    );
+    return {
+      identity: {
+        providerId,
+        modelId: model.id,
+        routeId: `multi/${providerId}/${encodeURIComponent(model.id)}`,
+        oneMillionContext: false,
+      },
+      label: model.name,
+      protocol: 'openai-chat',
+      contextWindow: model.contextWindow,
+      maxOutputTokens: model.maxTokens,
+      capabilities: {
+        text: true,
+        streaming: true,
+        tools: true,
+        reasoning: efforts.length > 0,
+        images: model.input.includes('image'),
+      },
+      ...(efforts.length > 0 ? { reasoning: { native: true, efforts } } : {}),
+    };
+  });
 }

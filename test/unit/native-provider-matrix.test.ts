@@ -308,7 +308,7 @@ test('provider matrix: picker rows resolve to one worker type per provider', () 
   }
 });
 
-test('provider matrix: the usage dashboard lists all eight providers in a stable order', async () => {
+test('provider matrix: the usage dashboard omits unconfigured Strata and keeps stable order', async () => {
   const dashboard = new ProviderUsageDashboard({
     enabled: ['openai', 'cursor', 'zen', 'deepseek'],
     openai: async () => ({ summary: 'openai quota', details: [] }),

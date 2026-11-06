@@ -23,6 +23,7 @@ export type PiBackendLoader = () => Promise<typeof import('./backend.ts')>;
 export interface PiGatewayRequestDeps {
   loadBackend?: PiBackendLoader;
   providerId?: PiProviderId;
+  baseUrl?: string;
 }
 
 function estimatePiInputTokens(
@@ -136,6 +137,7 @@ export function preparePiRequest(
           options: translated.options,
           onProviderStreamEvent: (chunk: unknown) => usage.observe(chunk),
           label,
+          ...(deps.baseUrl === undefined ? {} : { baseUrl: deps.baseUrl }),
         });
         return {
           ok: true,

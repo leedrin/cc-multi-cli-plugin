@@ -75,7 +75,32 @@ test('all Pi catalogs are provider-scoped strict allowlists with exact GLM metad
   const catalogs = Reflect.get(piCatalog, 'PI_MODELS_BY_PROVIDER') as
     | Record<string, readonly (typeof PI_DEEPSEEK_MODELS)[number][]>
     | undefined;
-  assert.deepEqual(Object.keys(catalogs ?? {}), ['deepseek', 'zai', 'zai-coding-cn']);
+  assert.deepEqual(Object.keys(catalogs ?? {}), ['deepseek', 'zai', 'zai-coding-cn', 'strata']);
+  assert.deepEqual(
+    (catalogs?.strata ?? []).map(({ id }) => id),
+    ['qwen3.8-flash-next'],
+  );
+  const strataModel = catalogs?.strata?.[0];
+  assert.ok(strataModel);
+  assert.deepEqual(strataModel, {
+    id: 'qwen3.8-flash-next',
+    name: 'Qwen 3.8 Flash Next',
+    api: 'openai-completions',
+    type: 'chat',
+    contextWindow: 196_608,
+    maxTokens: 32_768,
+    input: ['text'],
+    thinkingLevelMap: {},
+    providerId: 'strata',
+  });
+  assert.deepEqual(
+    piCatalog.filterPiModelsForProvider('strata', 'qwen3.8-flash-next').map(({ id }) => id),
+    ['qwen3.8-flash-next'],
+  );
+  assert.deepEqual(resolvePiEffort(strataModel, 'high'), {
+    effort: undefined,
+    notice: 'qwen3.8-flash-next does not support effort; ignoring high.',
+  });
   assert.deepEqual(
     PI_PROVIDERS.map(({ id, modelIds }) => [id, modelIds]),
     Object.entries(catalogs ?? {}).map(([id, models]) => [
@@ -88,7 +113,7 @@ test('all Pi catalogs are provider-scoped strict allowlists with exact GLM metad
     'zai-coding-cn': ['glm-5.3', 'glm-5.3-flash'],
   };
   for (const [provider, ids] of Object.entries(expected)) {
-    const models = catalogs?.[provider] ?? [];
+    const models: readonly (typeof PI_DEEPSEEK_MODELS)[number][] = catalogs?.[provider] ?? [];
     assert.deepEqual(
       models.map(({ id }) => id),
       ids,

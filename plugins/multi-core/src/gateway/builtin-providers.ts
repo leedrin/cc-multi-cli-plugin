@@ -19,7 +19,8 @@ export interface BuiltinProviderCredentials {
   authFile?: string;
   zenKey?: string;
   deepseekKey?: string;
-  piKeys?: Partial<Record<'deepseek' | 'zai' | 'zai-coding-cn', string>>;
+  piKeys?: Partial<Record<'deepseek' | 'zai' | 'zai-coding-cn' | 'strata', string>>;
+  strataBaseUrl?: string;
 }
 
 export function registerBuiltinProviders(
@@ -31,10 +32,13 @@ export function registerBuiltinProviders(
       credentials.authFile === undefined ? {} : { authFile: credentials.authFile },
     ),
     bindZenProvider(credentials.zenKey === undefined ? {} : { apiKey: credentials.zenKey }),
-    ...bindPiProviders({
-      ...credentials.piKeys,
-      ...(credentials.deepseekKey === undefined ? {} : { deepseek: credentials.deepseekKey }),
-    }),
+    ...bindPiProviders(
+      {
+        ...credentials.piKeys,
+        ...(credentials.deepseekKey === undefined ? {} : { deepseek: credentials.deepseekKey }),
+      },
+      { strataBaseUrl: credentials.strataBaseUrl },
+    ),
     cursorProvider,
     antigravityProvider,
     grokProvider,

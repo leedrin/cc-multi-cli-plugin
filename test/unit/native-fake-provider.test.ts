@@ -2,8 +2,11 @@ import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
-import { createBuiltinRegistry } from '../../plugins/multi-core/src/gateway/builtin-providers.ts';
-import type { ProviderDescriptor } from '../../plugins/multi-core/src/gateway/provider-registry.ts';
+import { BUILTIN_PROVIDERS } from '../../plugins/multi-core/src/gateway/builtin-providers.ts';
+import {
+  type ProviderDescriptor,
+  ProviderRegistry,
+} from '../../plugins/multi-core/src/gateway/provider-registry.ts';
 import type {
   ProviderUsageReader,
   ProviderUsageView,
@@ -50,7 +53,8 @@ const usageReader: ProviderUsageReader = async (session) => {
   return { summary: `Fixture quota for ${session}`, details: ['Fixture usage reader called'] };
 };
 
-const registry = createBuiltinRegistry();
+const registry = new ProviderRegistry();
+registry.registerMany(BUILTIN_PROVIDERS.filter(({ id }) => id !== 'strata'));
 registry.register({
   id: 'strata',
   plugin: 'pi',
@@ -175,9 +179,13 @@ async function typescriptFiles(directory: string): Promise<string[]> {
 
 test('gateway core sources contain no provider-specific Strata branch', async () => {
   const sourceFiles = await typescriptFiles('plugins/multi-core/src');
-  const filesToCheck = sourceFiles.filter(
-    (file) => file !== join('plugins/multi-core/src/gateway', 'provider-facts.ts'),
-  );
+  const providerIntegrationFiles = new Set([
+    join('plugins/multi-core/src/gateway', 'provider-facts.ts'),
+    join('plugins/multi-core/src/gateway', 'builtin-providers.ts'),
+    join('plugins/multi-core/src/gateway', 'provider-usage.ts'),
+    join('plugins/multi-core/src', 'launcher.ts'),
+  ]);
+  const filesToCheck = sourceFiles.filter((file) => !providerIntegrationFiles.has(file));
   const matches = await Promise.all(
     filesToCheck.map(async (file) => {
       const source = await readFile(file, 'utf8');

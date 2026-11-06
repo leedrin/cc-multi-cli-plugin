@@ -66,8 +66,8 @@
 
 ## 8. P5c Strata（DD §16.1）
 
-- [ ] 8.1 用 `createProvider` 定义 Strata，地址和 key 来自 Multi 的环境变量；非回环 `http://` 与非法 URL 报错；缺地址时不出现在 picker 和 worker；回环地址无 key 发送占位值，非回环无 key 报错；不读 `~/.pi/agent/models.json`；单测通过
-- [ ] 8.2 Strata 模型无 effort，带 effort 的请求丢弃 effort 并提示一次；usage 走第 6.7 项的规则；fixture 离线通过
+- [x] 8.1 用 `createProvider` 定义 Strata，地址和 key 来自 Multi 的环境变量；非回环 `http://` 与非法 URL 报错；缺地址时不出现在 picker 和 worker；回环地址无 key 发送占位值，非回环无 key 报错；不读 `~/.pi/agent/models.json`；单测通过
+- [x] 8.2 Strata 模型无 effort，带 effort 的请求丢弃 effort 并提示一次；usage 走第 6.7 项的规则；fixture 离线通过
 - [ ] 8.3 更新 `docs/pi.md` 的 Strata 配置与 `CHANGELOG.md`；`npm run check` 通过
 
 ## 9. P6 Live 验收（需用户批准）

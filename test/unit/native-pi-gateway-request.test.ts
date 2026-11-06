@@ -5,7 +5,7 @@ import { createBuiltinRegistry } from '../../plugins/multi-core/src/gateway/buil
 import type { ContentBlock } from '../../plugins/multi-core/src/gateway/messages.ts';
 import type { ProviderRequestInput } from '../../plugins/multi-core/src/gateway/provider-request.ts';
 import { estimateTextTokens } from '../../plugins/multi-core/src/gateway/tokens.ts';
-import { PI_DEEPSEEK_MODELS } from '../../plugins/multi-pi/src/catalog.ts';
+import { PI_DEEPSEEK_MODELS, PI_MODELS_BY_PROVIDER } from '../../plugins/multi-pi/src/catalog.ts';
 import { preparePiRequest } from '../../plugins/multi-pi/src/gateway-request.ts';
 import { encodePiSignature } from '../../plugins/multi-pi/src/signature.ts';
 import { createNativeGateway } from './support/runtime.ts';
@@ -407,6 +407,50 @@ test('disabled thinking omits reasoning effort and carries explicit tool choice'
     PI_DEEPSEEK_MODELS.some(({ id }) => id === 'deepseek-v4-pro'),
     true,
   );
+});
+
+test('Strata drops effort, binds route signature, and emits one notice', async () => {
+  let seen: Record<string, unknown> | undefined;
+  const strataModel = PI_MODELS_BY_PROVIDER.strata[0];
+  assert.ok(strataModel);
+  const prepared = preparePiRequest(
+    input({
+      body: {
+        ...input().body,
+        model: 'multi/strata/qwen3.8-flash-next',
+        output_config: { effort: 'high' },
+      },
+    }),
+    'local',
+    {
+      providerId: 'strata',
+      baseUrl: 'http://127.0.0.1:8321/v1',
+      loadBackend: loader((request) => {
+        seen = request;
+        return {
+          first,
+          stream: {
+            async *[Symbol.asyncIterator]() {
+              yield { type: 'done', reason: 'stop', message: { content: [] } };
+            },
+          },
+        };
+      }),
+    },
+  );
+  assert.equal(prepared.route, 'strata');
+  const result = await prepared.open(new AbortController().signal, async () => new Response());
+  assert.equal(seen?.reasoningEffort, undefined);
+  assert.equal(seen?.baseUrl, 'http://127.0.0.1:8321/v1');
+  assert.ok(result.ok);
+  if (result.ok) {
+    const translated = await result.translate(undefined, () => {});
+    assert.deepEqual(
+      translated.content.filter((block) => block.type === 'text').map((block) => block.text),
+      ['[Strata] qwen3.8-flash-next does not support effort; ignoring high.'],
+    );
+  }
+  assert.equal(strataModel.id, 'qwen3.8-flash-next');
 });
 
 test('non-2xx typed Pi status maps without exposing body or losing retry-after', async () => {

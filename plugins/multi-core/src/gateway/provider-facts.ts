@@ -61,7 +61,14 @@ export const PROVIDER_FACTS: readonly ProviderFact[] = [
     label: 'Z.AI Coding (CN)',
     credentialEnv: ['ZAI_CODING_CN_API_KEY'],
   },
-  { id: 'strata', plugin: 'pi', kind: 'direct', worker: 'multi-strata', label: 'Strata' },
+  {
+    id: 'strata',
+    plugin: 'pi',
+    kind: 'direct',
+    worker: 'multi-strata',
+    label: 'Strata',
+    credentialEnv: ['STRATA_API_KEY'],
+  },
 ] as const;
 
 export type ProviderId = (typeof PROVIDER_FACTS)[number]['id'];

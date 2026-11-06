@@ -5,10 +5,9 @@ import type { PiCatalogModel } from './catalog.ts';
 import type { PiProviderId } from './providers.ts';
 
 // Fixed provider subpaths are the narrow exception to AGENTS.md's direct-import preference.
-type DeepseekProvider = ReturnType<
+type PiProvider = ReturnType<
   typeof import('@earendil-works/pi-ai/providers/deepseek').deepseekProvider
 >;
-type PiProvider = DeepseekProvider;
 type PiModel = ReturnType<PiProvider['getModels']>[number];
 type PiEventStream = ReturnType<PiProvider['stream']>;
 type PiIterator = ReturnType<PiEventStream[typeof Symbol.asyncIterator]>;
@@ -20,6 +19,39 @@ const FACTORIES = {
   zai: async () => (await import('@earendil-works/pi-ai/providers/zai')).zaiProvider(),
   'zai-coding-cn': async () =>
     (await import('@earendil-works/pi-ai/providers/zai-coding-cn')).zaiCodingCnProvider(),
+  strata: async (model: PiCatalogModel, baseUrl: string) => {
+    const [{ createProvider }, { openAICompletionsApi }] = await Promise.all([
+      import('@earendil-works/pi-ai/models'),
+      import('@earendil-works/pi-ai/api/openai-completions.lazy'),
+    ]);
+    return createProvider({
+      id: 'strata',
+      models: [
+        {
+          ...model,
+          input: [...model.input] as ('text' | 'image')[],
+          provider: 'strata',
+          baseUrl,
+          reasoning: false,
+          compat: {
+            supportsDeveloperRole: false,
+            supportsReasoningEffort: false,
+            maxTokensField: 'max_tokens',
+          },
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      ],
+      api: openAICompletionsApi(),
+      auth: {
+        apiKey: {
+          name: 'Strata API key',
+          resolve: async ({ credential }) => ({
+            auth: { apiKey: credential?.key ?? 'local' },
+          }),
+        },
+      },
+    }) as unknown as PiProvider;
+  },
 } as const;
 
 export interface PiStreamRequest {
@@ -33,6 +65,7 @@ export interface PiStreamRequest {
   onProviderStreamEvent?: (chunk: unknown) => void;
   fetch?: typeof globalThis.fetch;
   label: string;
+  baseUrl?: string;
 }
 
 export interface OpenPiStreamResult {
@@ -95,7 +128,17 @@ function safeError(label: string, status: number | undefined, retryAfter: string
   return new Error(`${label} request failed.`);
 }
 
-export async function loadPiProvider(providerId: PiProviderId) {
+export async function loadPiProvider(
+  providerId: PiProviderId,
+  model?: PiCatalogModel,
+  baseUrl?: string,
+) {
+  if (providerId === 'strata') {
+    if (!model || !baseUrl) {
+      throw new Error('Strata model and base URL are required.');
+    }
+    return FACTORIES.strata(model, baseUrl);
+  }
   return FACTORIES[providerId]();
 }
 
@@ -103,12 +146,16 @@ export async function openPiStream(request: PiStreamRequest): Promise<OpenPiStre
   if (request.signal?.aborted) {
     throw new Error('aborted');
   }
-  const provider = await loadPiProvider(request.providerId);
+  const provider = await loadPiProvider(request.providerId, request.model, request.baseUrl);
   const model = provider.getModels().find(({ id }) => id === request.model.id);
   if (!model) {
     throw new Error(`${request.label} model is unavailable.`);
   }
-  const requestModel = { ...model, thinkingLevelMap: request.model.thinkingLevelMap } as PiModel;
+  const requestModel = {
+    ...model,
+    ...(request.baseUrl === undefined ? {} : { baseUrl: request.baseUrl }),
+    thinkingLevelMap: request.model.thinkingLevelMap,
+  } as PiModel;
   let status: number | undefined;
   let retryAfter: string | null = null;
   const events = provider.stream(requestModel, normalizeContext(request.context), {
@@ -131,7 +178,7 @@ export async function openPiStream(request: PiStreamRequest): Promise<OpenPiStre
     ...(request.signal ? { signal: request.signal } : {}),
     fetch: createPiFetch(
       request.fetch ?? globalThis.fetch,
-      new URL(provider.baseUrl ?? '').origin,
+      new URL(request.baseUrl ?? provider.baseUrl ?? '').origin,
       request.label,
       (response) => {
         status = response.status;

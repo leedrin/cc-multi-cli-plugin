@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createBuiltinRegistry } from '../../plugins/multi-core/src/gateway/builtin-providers.ts';
+import { BUILTIN_PROVIDERS } from '../../plugins/multi-core/src/gateway/builtin-providers.ts';
 import {
   type ProviderDescriptor,
+  ProviderRegistry,
   ProviderRuntime,
 } from '../../plugins/multi-core/src/gateway/provider-registry.ts';
 import type {
@@ -10,7 +11,11 @@ import type {
   ProviderUsageView,
 } from '../../plugins/multi-core/src/gateway/provider-usage.ts';
 import { createNativeGateway } from '../../plugins/multi-core/src/gateway/server.ts';
-import { launcherRuntime } from '../../plugins/multi-core/src/launcher.ts';
+import {
+  createLaunchRegistry,
+  discoverLaunchProviders,
+  launcherRuntime,
+} from '../../plugins/multi-core/src/launcher.ts';
 
 const model = {
   identity: {
@@ -28,6 +33,16 @@ const usageReader: ProviderUsageReader = async (session) => ({
   summary: `${session} strata quota`,
   details: ['Strata account usage'],
 });
+
+function registryWithoutStrata() {
+  const registry = new ProviderRegistry();
+  for (const descriptor of BUILTIN_PROVIDERS) {
+    if (descriptor.id !== 'strata') {
+      registry.register(descriptor);
+    }
+  }
+  return registry;
+}
 
 function strataDescriptor(usage?: ProviderUsageReader): ProviderDescriptor {
   return {
@@ -72,7 +87,7 @@ async function readUsage(runtime: ProviderRuntime, enabledProviders?: readonly s
 }
 
 test('production usage menu shows generic active rows and calls descriptor usage readers', async () => {
-  const registry = createBuiltinRegistry();
+  const registry = registryWithoutStrata();
   registry.register(strataDescriptor(usageReader));
   const runtime = launcherRuntime(
     'unused-auth-file',
@@ -94,7 +109,7 @@ test('production usage menu shows generic active rows and calls descriptor usage
 });
 
 test('production usage menu reports unavailable quota for generic active providers without a reader', async () => {
-  const registry = createBuiltinRegistry();
+  const registry = registryWithoutStrata();
   registry.register(strataDescriptor());
   const runtime = launcherRuntime(
     'unused-auth-file',
@@ -115,8 +130,43 @@ test('production usage menu reports unavailable quota for generic active provide
   assert.equal(row?.url, undefined);
 });
 
+test('real Strata usage row is absent without an address even with a key, and present when configured', async () => {
+  for (const env of [
+    {},
+    { STRATA_API_KEY: 'fake-strata-key' },
+    { MULTI_STRATA_BASE_URL: 'http://127.0.0.1:8321/v1' },
+  ]) {
+    const configured = Boolean(env.MULTI_STRATA_BASE_URL);
+    const discovery = await discoverLaunchProviders(createLaunchRegistry, ['strata'], {
+      env,
+      platform: 'linux',
+    });
+    const runtime = launcherRuntime(
+      '',
+      undefined,
+      {},
+      { cursor: undefined, antigravity: undefined, grok: undefined },
+      undefined,
+      discovery.genericModels,
+      createLaunchRegistry,
+      undefined,
+      discovery.piKeys,
+      discovery.strataBaseUrl,
+    );
+    try {
+      const view = await readUsage(runtime, ['strata']);
+      assert.equal(view.providers.filter(({ id }) => id === 'strata').length, configured ? 1 : 0);
+      if (configured) {
+        assert.equal(view.providers.find(({ id }) => id === 'strata')?.status, 'unavailable');
+      }
+    } finally {
+      await runtime.close();
+    }
+  }
+});
+
 test('production usage menu applies generic provider activation, harness and enabled filters', async () => {
-  const registry = createBuiltinRegistry();
+  const registry = registryWithoutStrata();
   const strata = strataDescriptor(usageReader);
   registry.register(strata);
   const antigravity = registry.get('antigravity');
@@ -141,9 +191,9 @@ test('production usage menu applies generic provider activation, harness and ena
       'deepseek',
       'zai',
       'zai-coding-cn',
+      'strata',
       'antigravity',
       'grok',
-      'strata',
     ],
   );
   assert.equal(view.providers.filter(({ id }) => id === 'deepseek').length, 1);
@@ -151,7 +201,10 @@ test('production usage menu applies generic provider activation, harness and ena
   assert.equal(view.providers.find(({ id }) => id === 'antigravity')?.status, 'disabled');
 
   const noGenericActive = await readUsage(new ProviderRuntime([], { registry }));
-  assert(!noGenericActive.providers.some(({ id }) => id === 'strata'));
+  assert.equal(
+    noGenericActive.providers.some(({ id }) => id === 'strata'),
+    false,
+  );
   assert.equal(noGenericActive.providers.filter(({ id }) => id === 'deepseek').length, 1);
 
   const filtered = await readUsage(runtime, ['strata']);

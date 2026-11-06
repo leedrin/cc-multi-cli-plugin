@@ -59,6 +59,11 @@ const USAGE_ROWS = [
     ],
   },
   {
+    id: 'strata',
+    name: 'Strata',
+    unavailable: ['Strata reports no account quota; per-run usage appears in session receipts.'],
+  },
+  {
     id: 'antigravity',
     name: 'Antigravity',
     unavailable: [
@@ -304,7 +309,7 @@ export class ProviderUsageDashboard {
       url?: string;
       unavailable: readonly string[];
     }> = [
-      ...USAGE_ROWS,
+      ...USAGE_ROWS.filter(({ id }) => id !== 'strata' || this.options.enabled.includes(id)),
       ...(this.options.extraRows ?? [])
         .filter(({ id }) => !builtInIds.has(id))
         .map(({ id, name }) => ({

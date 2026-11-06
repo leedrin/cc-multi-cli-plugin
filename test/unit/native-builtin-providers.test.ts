@@ -25,6 +25,7 @@ const BUILTIN_IDS = [
   'deepseek',
   'zai',
   'zai-coding-cn',
+  'strata',
   'cursor',
   'antigravity',
   'grok',
@@ -33,6 +34,7 @@ const LEGACY_SIGNATURE_PREFIXES = [
   'multi-openai:',
   'multi-zen-responses:',
   'multi-zen-chat:',
+  'multipi:v1:',
   'multipi:v1:',
 ];
 const LEGACY_AUTO_REVIEW = {
@@ -72,9 +74,9 @@ test('built-in descriptor credentials match their single-source provider facts',
   }
 });
 
-test('built-in registry registers eight provider descriptors with matching facts', () => {
+test('built-in registry registers nine provider descriptors with matching facts', () => {
   const registry = createBuiltinRegistry();
-  assert.equal(registry.list().length, 8);
+  assert.equal(registry.list().length, 9);
   assert.deepEqual(
     registry.list().map(({ id }) => id),
     BUILTIN_IDS,
@@ -95,7 +97,7 @@ test('Registry prefixes, review policies, and harness unavailable messages retai
     [...LEGACY_SIGNATURE_PREFIXES].sort(),
   );
   for (const descriptor of BUILTIN_PROVIDERS) {
-    if (['deepseek', 'zai', 'zai-coding-cn'].includes(descriptor.id)) {
+    if (['deepseek', 'zai', 'zai-coding-cn', 'strata'].includes(descriptor.id)) {
       assert.deepEqual(descriptor.autoReview, {
         review: 'none',
         statement: 'no auto mode: actions run unreviewed',

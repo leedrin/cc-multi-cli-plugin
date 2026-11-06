@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { PROVIDER_FACTS } from '../../plugins/multi-core/src/gateway/provider-facts.ts';
 import { bindPiProviders, deepseekDescriptor } from '../../plugins/multi-pi/src/provider.ts';
+import { strataUrlUsesLoopback, validatedStrataUrl } from '../../plugins/multi-pi/src/providers.ts';
 
 const fact = PROVIDER_FACTS.find(({ id }) => id === 'deepseek');
 
@@ -71,6 +72,7 @@ test('Pi provider bindings keep GLM keys, worker facts, and availability isolate
       ['deepseek', ['DEEPSEEK_API_KEY'], 'multi-deepseek'],
       ['zai', ['ZAI_API_KEY'], 'multi-zai'],
       ['zai-coding-cn', ['ZAI_CODING_CN_API_KEY'], 'multi-zai-coding-cn'],
+      ['strata', ['STRATA_API_KEY'], 'multi-strata'],
     ],
   );
   assert.equal((await bound[0].availability(context())).available, false);
@@ -105,7 +107,106 @@ test('Pi provider bindings keep GLM keys, worker facts, and availability isolate
   );
 });
 
-test('DeepSeek provider source does not import pi-ai', async () => {
+test('Strata is available only with a valid base URL and isolated credentials', async () => {
+  const strata = bindPiProviders(
+    { strata: 'fake-strata-key' },
+    {
+      strataBaseUrl: 'https://strata.example.test/v1',
+    },
+  ).find(({ id }) => id === 'strata');
+  assert.ok(strata);
+  assert.deepEqual(strata.credentialEnv, ['STRATA_API_KEY']);
+  assert.equal(strata.worker?.type, 'multi-strata');
+  assert.deepEqual(await strata.availability(context()), {
+    available: false,
+    reason: 'Set MULTI_STRATA_BASE_URL to enable Strata.',
+  });
+  assert.deepEqual(
+    await strata.availability({
+      ...context(),
+      env: {
+        MULTI_STRATA_BASE_URL: 'https://strata.example.test/v1',
+        STRATA_API_KEY: 'fake-strata-key',
+      },
+    }),
+    { available: true },
+  );
+  assert.deepEqual(
+    await strata.availability({
+      ...context(),
+      env: { MULTI_STRATA_BASE_URL: 'http://[::1]:8080/v1' },
+    }),
+    { available: true },
+  );
+  await assert.rejects(
+    strata.discoverModels({
+      ...context(),
+      env: { MULTI_STRATA_BASE_URL: 'http://strata.example.test' },
+    }),
+    /HTTPS or HTTP on loopback/,
+  );
+});
+
+test('Strata URL validation rejects malformed, unsafe protocols, and userinfo without echoing secrets', () => {
+  for (const value of [
+    'http://userinfo-secret:password-secret@[invalid?token=query-secret&key=fake-key-secret',
+    'ftp://strata.fake.invalid/path?token=query-secret&key=fake-key-secret',
+    'http://strata.fake.invalid/path?token=query-secret&key=fake-key-secret',
+    'https://userinfo-secret:password-secret@strata.fake.invalid/v1?token=query-secret&key=fake-key-secret',
+  ]) {
+    assert.throws(
+      () => validatedStrataUrl(value),
+      (error: Error) => {
+        assert.doesNotMatch(
+          error.message,
+          /userinfo-secret|password-secret|query-secret|fake-key-secret/,
+        );
+        assert.ok(
+          error.message === 'Strata base URL is invalid.' ||
+            error.message === 'Strata base URL must not contain credentials.' ||
+            error.message === 'Strata base URL must use HTTPS or HTTP on loopback.',
+        );
+        return true;
+      },
+    );
+  }
+  assert.equal(
+    validatedStrataUrl('https://strata.fake.invalid/v1')?.hostname,
+    'strata.fake.invalid',
+  );
+  for (const hostname of ['localhost', '127.42.5.9', '[::1]']) {
+    assert.equal(strataUrlUsesLoopback(new URL(`http://${hostname}:8321/v1`)), true);
+    assert.equal(validatedStrataUrl(`http://${hostname}:8321/v1`)?.protocol, 'http:');
+  }
+  assert.equal(strataUrlUsesLoopback(new URL('http://128.0.0.1:8321/v1')), false);
+});
+
+test('Strata request binding rejects absent or whitespace keys without borrowing other credentials', () => {
+  for (const key of [undefined, '', '  \t']) {
+    const strata = bindPiProviders(
+      { strata: key, deepseek: 'fake-other-key', zai: 'fake-zai-key' },
+      { strataBaseUrl: 'https://strata.fake.invalid/v1?token=query-secret' },
+    ).find(({ id }) => id === 'strata');
+    assert(strata?.direct);
+    assert.throws(
+      () =>
+        strata.direct?.prepare({
+          method: 'POST',
+          pathname: '/v1/messages',
+          body: { model: 'multi/strata/qwen3.8-flash-next', messages: [] },
+          session: 'offline',
+          fallbackSession: 'fallback',
+        }),
+      (error: Error) => {
+        assert.equal(error.message, 'Strata requires STRATA_API_KEY for a non-loopback base URL.');
+        assert.doesNotMatch(error.message, /fake-other-key|fake-zai-key|query-secret/);
+        return true;
+      },
+    );
+  }
+});
+
+test('Strata provider source does not import pi-ai', async () => {
   const source = await readFile(
     new URL('../../plugins/multi-pi/src/provider.ts', import.meta.url),
     'utf8',

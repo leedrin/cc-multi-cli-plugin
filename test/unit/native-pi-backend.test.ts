@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import { inspect } from 'node:util';
 import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript';
 import { createPiFetch, openPiStream } from '../../plugins/multi-pi/src/backend.ts';
-import { PI_DEEPSEEK_MODELS } from '../../plugins/multi-pi/src/catalog.ts';
+import { PI_DEEPSEEK_MODELS, PI_MODELS_BY_PROVIDER } from '../../plugins/multi-pi/src/catalog.ts';
 import { discoverPiModels } from '../../plugins/multi-pi/src/provider.ts';
+import { decodePiSignature } from '../../plugins/multi-pi/src/signature.ts';
 
 const fakeKey = 'test-only-DEEPSEEK-FAKE-KEY';
 const model = PI_DEEPSEEK_MODELS[0];
@@ -26,9 +30,13 @@ test('Pi keyless runtime discovery does not load backend or pi-ai', () => {
   const loaderUrl = new URL('./fixtures/native-pi-import-boundary-loader.mjs', import.meta.url)
     .href;
   const script = `
-    const { discoverPiModels } = await import(${JSON.stringify(providerUrl)});
+    const { discoverPiModels, bindPiProviders } = await import(${JSON.stringify(providerUrl)});
     const models = await discoverPiModels({ cwd: '.', env: {}, explicit: true, log: () => {} });
     if (models.length !== 2) throw new Error('Unexpected keyless model count');
+    const strata = bindPiProviders().find(({ id }) => id === 'strata');
+    const ctx = { cwd: '.', env: { STRATA_API_KEY: 'fake-disabled-key' }, explicit: true, log: () => {} };
+    if ((await strata.availability(ctx)).available) throw new Error('Unconfigured Strata available');
+    if ((await strata.discoverModels(ctx)).length) throw new Error('Unconfigured Strata discovered');
   `;
   const result = spawnSync(
     process.execPath,
@@ -60,6 +68,333 @@ test('only ZAI key loads only the ZAI provider in a child process', () => {
   assert.match(result.stderr, /PI_PROVIDER_LOADS:/);
   assert.match(result.stderr, /zai\.js/);
   assert.doesNotMatch(result.stderr, /all\.js|deepseek\.js|zai-coding-cn\.js/);
+});
+
+test('Strata backend confines imports, avoids home Pi files, and sends the curated request', async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'multi-strata-home-'));
+  const piDir = path.join(home, '.pi', 'agent');
+  const marker = path.join(home, 'SHOULD_NOT_RUN');
+  const payload = Buffer.from(
+    `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'ran')`,
+  ).toString('base64');
+  const command = `"${process.execPath}" -e "eval(Buffer.from('${payload}', 'base64').toString())"`;
+  await mkdir(piDir, { recursive: true });
+  await writeFile(
+    path.join(piDir, 'models.json'),
+    JSON.stringify({
+      providers: {
+        strata: { baseUrl: 'https://strata.fake.invalid/v1', apiKey: `!${command}`, models: [] },
+      },
+      canary: 'CANARY_STRATA_MODELS_KEY',
+    }),
+  );
+  await writeFile(
+    path.join(piDir, 'auth.json'),
+    JSON.stringify({ strata: { type: 'api_key', key: `!${command}` } }),
+  );
+  try {
+    const loaderUrl = new URL(
+      './fixtures/native-pi-strata-import-boundary-loader.mjs',
+      import.meta.url,
+    ).href;
+    const backendUrl = new URL('../../plugins/multi-pi/src/backend.ts', import.meta.url).href;
+    const catalogUrl = new URL('../../plugins/multi-pi/src/catalog.ts', import.meta.url).href;
+    const transcriptUrl = import.meta.resolve('@earendil-works/pi-ai/utils/transcript');
+    const script = `
+      import fs from 'node:fs';
+      import fsp from 'node:fs/promises';
+      import path from 'node:path';
+      import { syncBuiltinESMExports } from 'node:module';
+      import { fileURLToPath } from 'node:url';
+      const reads = [];
+      const piFiles = [${JSON.stringify(path.join(piDir, 'models.json'))}, ${JSON.stringify(path.join(piDir, 'auth.json'))}];
+      const recordsPiRead = (original) => function(file, ...args) {
+        const name = file instanceof URL ? fileURLToPath(file) : file;
+        const resolved = typeof name === 'string' || Buffer.isBuffer(name) ? path.resolve(String(name)).toLowerCase() : '';
+        if (piFiles.some((target) => resolved === target.toLowerCase())) reads.push(resolved);
+        return original.call(this, file, ...args);
+      };
+      for (const method of ['readFile', 'readFileSync', 'existsSync', 'openSync', 'open', 'createReadStream']) {
+        fs[method] = recordsPiRead(fs[method]);
+      }
+      fsp.readFile = recordsPiRead(fsp.readFile);
+      fsp.open = recordsPiRead(fsp.open);
+      syncBuiltinESMExports();
+      const { createLaunchRegistry, discoverLaunchProviders } = await import(${JSON.stringify(new URL('../../plugins/multi-core/src/launcher.ts', import.meta.url).href)});
+      const found = await discoverLaunchProviders(createLaunchRegistry, ['strata'], {
+        env: { MULTI_STRATA_BASE_URL: 'http://127.0.0.1:8321/v1' }, platform: 'linux'
+      });
+      if (found.genericModels.strata?.length !== 1) throw new Error('Strata discovery missing');
+      const [{ openPiStream }, { PI_MODELS_BY_PROVIDER }, { normalizeContext }] = await Promise.all([
+        import(${JSON.stringify(backendUrl)}),
+        import(${JSON.stringify(catalogUrl)}),
+        import(${JSON.stringify(transcriptUrl)})
+      ]);
+      const model = PI_MODELS_BY_PROVIDER.strata[0];
+      let target = '';
+      let headers;
+      let sentBody;
+      const fetch = async (input, init) => {
+        target = input instanceof Request ? input.url : String(input);
+        headers = new Headers(init?.headers);
+        sentBody = JSON.parse(String(init?.body));
+        return new Response([
+          'data: ' + JSON.stringify({ choices: [{ delta: { role: 'assistant', content: 'ok' }, finish_reason: null }] }) + '\\n\\n',
+          'data: ' + JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] }) + '\\n\\n',
+          'data: ' + JSON.stringify({ choices: [], usage: { prompt_tokens: 12, completion_tokens: 2 } }) + '\\n\\n',
+          'data: [DONE]\\n\\n'
+        ].join(''), { status: 200 });
+      };
+      const opened = await openPiStream({
+        providerId: 'strata', model, baseUrl: 'https://strata.fake.invalid/v1',
+        context: normalizeContext({ messages: [{ role: 'user', content: 'hello', timestamp: 0 }] }),
+        apiKey: process.env.STRATA_API_KEY, label: 'Strata', options: { maxTokens: 32000 }, fetch
+      });
+      for await (const _event of opened.stream) {}
+      if (reads.length) throw new Error('Unexpected Pi file reads: ' + reads.join(','));
+      if (new URL(target).origin !== 'https://strata.fake.invalid') throw new Error('wrong origin ' + target);
+      if (headers.get('authorization') !== 'Bearer fake-strata-key') throw new Error('wrong authorization');
+      if (sentBody.max_tokens !== 32000) throw new Error('wrong max_tokens ' + JSON.stringify(sentBody));
+      if ('reasoning_effort' in sentBody || 'thinking' in sentBody) throw new Error('effort leaked');
+      if (sentBody.messages.some(message => message.role === 'developer')) throw new Error('developer role leaked');
+      process.stdout.write('STRATA_REQUEST_OK');
+    `;
+    const result = spawnSync(
+      process.execPath,
+      ['--no-warnings', '--experimental-loader', loaderUrl, '--input-type=module', '-e', script],
+      {
+        cwd: home,
+        encoding: 'utf8',
+        timeout: 10000,
+        env: {
+          ...process.env,
+          HOME: home,
+          USERPROFILE: home,
+          STRATA_API_KEY: 'fake-strata-key',
+        },
+      },
+    );
+    assert.equal(result.status, 0, `${result.stdout}\\n${result.stderr}`);
+    assert.match(result.stdout, /STRATA_REQUEST_OK/);
+    assert.doesNotMatch(result.stderr, /PI_STRATA_FORBIDDEN_BUILTIN/);
+    assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /CANARY_STRATA_MODELS_KEY/);
+    await assert.rejects(access(marker));
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('Strata launch binding drives offline SSE through the real backend and stream translator', async () => {
+  const { createLaunchRegistry, discoverLaunchProviders, launcherRuntime } = await import(
+    '../../plugins/multi-core/src/launcher.ts'
+  );
+  for (const [baseUrl, apiKey, expectedKey, reasoning] of [
+    ['http://127.0.0.1:8321/v1', undefined, 'local', false],
+    ['https://strata.fake.invalid/v1', 'fake-strata-key', 'fake-strata-key', false],
+    ['https://strata.fake.invalid/v1', 'fake-strata-key', 'fake-strata-key', true],
+  ] as const) {
+    const discovery = await discoverLaunchProviders(createLaunchRegistry, ['strata'], {
+      env: {
+        MULTI_STRATA_BASE_URL: baseUrl,
+        ...(apiKey === undefined ? {} : { STRATA_API_KEY: apiKey }),
+      },
+      platform: 'linux',
+    });
+    const runtime = launcherRuntime(
+      '',
+      undefined,
+      {},
+      { cursor: undefined, antigravity: undefined, grok: undefined },
+      undefined,
+      discovery.genericModels,
+      createLaunchRegistry,
+      undefined,
+      discovery.piKeys,
+      discovery.strataBaseUrl,
+    );
+    const descriptor = runtime.registry?.get('strata');
+    assert(descriptor?.direct);
+    const prepared = descriptor.direct.prepare({
+      method: 'POST',
+      pathname: '/v1/messages',
+      body: {
+        model: 'multi/strata/qwen3.8-flash-next',
+        system: 'Follow the system directive.',
+        max_tokens: 1234,
+        output_config: { effort: 'high' },
+        messages: [{ role: 'user', content: 'Weather in Oslo?' }],
+        tools: [
+          {
+            name: 'weather',
+            description: 'Look up weather',
+            input_schema: {
+              type: 'object',
+              properties: { city: { type: 'string' } },
+              required: ['city'],
+            },
+          },
+        ],
+      },
+      session: 'offline-strata',
+      fallbackSession: 'fallback',
+    });
+    let target = '';
+    let authorization = '';
+    let sentBody: Record<string, unknown> = {};
+    const opened = await prepared.open(new AbortController().signal, async (url, init) => {
+      target = String(url);
+      authorization = new Headers(init?.headers).get('authorization') ?? '';
+      sentBody = JSON.parse(String(init?.body));
+      const events = [
+        ...(reasoning
+          ? [
+              {
+                choices: [
+                  { delta: { reasoning_content: 'Check the forecast.' }, finish_reason: null },
+                ],
+              },
+            ]
+          : []),
+        { choices: [{ delta: { role: 'assistant', content: 'Forecast ' }, finish_reason: null }] },
+        { choices: [{ delta: { content: 'ready.' }, finish_reason: null }] },
+        {
+          choices: [
+            {
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: 'call-weather',
+                    type: 'function',
+                    function: { name: 'weather', arguments: '{"city":' },
+                  },
+                ],
+              },
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          choices: [
+            {
+              delta: { tool_calls: [{ index: 0, function: { arguments: '"Oslo"}' } }] },
+              finish_reason: null,
+            },
+          ],
+        },
+        { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+        { choices: [], usage: { prompt_tokens: 12, completion_tokens: 4 } },
+      ];
+      return new Response(
+        `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')}data: [DONE]\n\n`,
+        {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        },
+      );
+    });
+    assert.equal(opened.ok, true);
+    assert.equal(new URL(target).origin, new URL(baseUrl).origin);
+    assert.equal(authorization, `Bearer ${expectedKey}`);
+    assert.equal(sentBody.max_tokens, 1234);
+    assert.equal('reasoning_effort' in sentBody, false);
+    assert.equal('thinking' in sentBody, false);
+    const messages = sentBody.messages as Array<{ role: string; content: string }>;
+    assert.deepEqual(
+      messages.map(({ role }) => role),
+      ['system', 'user'],
+    );
+    assert.equal(messages[0]?.content, 'Follow the system directive.');
+    assert.deepEqual(sentBody.tools, [
+      {
+        type: 'function',
+        function: {
+          name: 'weather',
+          description: 'Look up weather',
+          parameters: {
+            type: 'object',
+            properties: { city: { type: 'string' } },
+            required: ['city'],
+          },
+        },
+      },
+    ]);
+    if (opened.ok) {
+      const notices: string[] = [];
+      const result = await opened.translate(
+        (type, value) => {
+          if (
+            type === 'content_block_delta' &&
+            'delta' in value &&
+            value.delta.type === 'text_delta'
+          ) {
+            notices.push(value.delta.text);
+          }
+        },
+        () => {},
+      );
+      assert.equal(result.stop_reason, 'tool_use');
+      assert(
+        result.content.some((block) => block.type === 'text' && block.text === 'Forecast ready.'),
+      );
+      const thinking = result.content.filter((block) => block.type === 'thinking');
+      assert.equal(thinking.length, reasoning ? 1 : 0);
+      if (reasoning) {
+        const block = thinking[0];
+        assert(block?.type === 'thinking');
+        assert.equal(block.thinking, 'Check the forecast.');
+        assert.deepEqual(decodePiSignature(block.signature, 'multi/strata/qwen3.8-flash-next'), {
+          kind: 'owned',
+          payload: { thinking: 'Check the forecast.', thinkingSignature: 'reasoning_content' },
+        });
+        assert.deepEqual(decodePiSignature(block.signature, 'multi/deepseek/deepseek-v4-pro'), {
+          kind: 'foreign',
+        });
+      }
+      assert.deepEqual(
+        result.content
+          .filter(({ type }) => type === 'tool_use')
+          .map((block) => (block.type === 'tool_use' ? [block.name, block.input] : [])),
+        [['weather', { city: 'Oslo' }]],
+      );
+      assert.deepEqual(result.usage, { input_tokens: 12, output_tokens: 4 });
+      assert.equal(notices.filter((text) => text.includes('does not support effort')).length, 1);
+    }
+    await runtime.close();
+  }
+});
+
+test('Strata transport errors redact key, userinfo and query secrets', async () => {
+  const canary = 'fake-key-secret userinfo-secret password-secret query-secret';
+  for (const status of [undefined, 401]) {
+    await assert.rejects(
+      openPiStream({
+        providerId: 'strata',
+        model: PI_MODELS_BY_PROVIDER.strata[0],
+        baseUrl: 'https://strata.fake.invalid/v1?token=query-secret',
+        apiKey: 'fake-key-secret',
+        label: 'Strata',
+        context,
+        fetch: async () => {
+          if (status === undefined) {
+            throw new Error(canary);
+          }
+          return new Response(JSON.stringify({ error: canary }), { status });
+        },
+      }),
+      (error: Error) => {
+        assert.equal(
+          error.message,
+          status === undefined ? 'Strata request failed.' : 'Strata returned HTTP 401.',
+        );
+        assert.doesNotMatch(
+          error.message,
+          /fake-key-secret|userinfo-secret|password-secret|query-secret/,
+        );
+        return true;
+      },
+    );
+  }
 });
 
 test('ZAI import boundary rejects every other provider subpath', () => {

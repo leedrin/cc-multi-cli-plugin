@@ -22,6 +22,7 @@ test('all enabled Pi credentials are extracted from launcher environment', () =>
     DEEPSEEK_API_KEY: 'fake-deepseek',
     ZAI_API_KEY: 'fake-zai',
     ZAI_CODING_CN_API_KEY: 'fake-zai-cn',
+    STRATA_API_KEY: 'fake-strata',
   };
   assert.deepEqual(
     takeProviderCredentials(env, bindPiProviders()),
@@ -29,6 +30,7 @@ test('all enabled Pi credentials are extracted from launcher environment', () =>
       ['DEEPSEEK_API_KEY', 'fake-deepseek'],
       ['ZAI_API_KEY', 'fake-zai'],
       ['ZAI_CODING_CN_API_KEY', 'fake-zai-cn'],
+      ['STRATA_API_KEY', 'fake-strata'],
     ]),
   );
   assert.deepEqual(env, {});
