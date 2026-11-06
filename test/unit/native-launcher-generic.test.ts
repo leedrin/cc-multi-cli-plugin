@@ -27,9 +27,12 @@ import {
   launcherRuntime,
   main,
   pickerSettings,
+  workerCatalog,
+  workerDefinitions,
 } from '../../plugins/multi-core/src/launcher.ts';
 import { discoverEnabledProviders } from '../../plugins/multi-core/src/provider-discovery.ts';
 import { grokEnvironment, runGrok } from '../../plugins/multi-grok/src/cli.ts';
+import { PI_DEEPSEEK_MODELS } from '../../plugins/multi-pi/src/catalog.ts';
 import { removeTemporary } from '../temporary.ts';
 
 function context(
@@ -212,6 +215,185 @@ for (const [providerId, name] of [
     }
   });
 }
+
+test('keyless DeepSeek and unconfigured Strata discovery produce no picker rows or workers', async () => {
+  const discovery = await discoverLaunchProviders(createLaunchRegistry, ['deepseek', 'strata'], {
+    env: {},
+    platform: 'linux',
+  });
+  assert.ok(!discovery.availableProviderIds.includes('deepseek'));
+  assert.ok(!discovery.availableProviderIds.includes('strata'));
+  const settings = pickerSettings(
+    false,
+    [],
+    false,
+    [],
+    [],
+    false,
+    discovery.availableProviderIds,
+    discovery.genericModels,
+  );
+  assert.deepEqual(
+    settings.modelPicker.options.filter(
+      ({ model: id }) => id.startsWith('multi/deepseek/') || id.startsWith('multi/strata/'),
+    ),
+    [],
+  );
+  assert.deepEqual(workerDefinitions(workerCatalog(settings.modelPicker.options)), {});
+});
+
+test('main expands plugin selection pi into all providers and activates DeepSeek', async () => {
+  const env: NodeJS.ProcessEnv = {
+    MULTI_ENABLED_PROVIDERS: 'pi',
+    DEEPSEEK_API_KEY: 'T051_DEEPSEEK',
+    ZAI_API_KEY: 'T051_ZAI',
+    ZAI_CODING_CN_API_KEY: 'T051_ZAI_CN',
+    MULTI_STRATA_BASE_URL: 'http://127.0.0.1:8123/v1',
+  };
+  let launchedDiscovery: Awaited<ReturnType<typeof discoverLaunchProviders>> | undefined;
+  let selectedIds: readonly string[] | undefined;
+  await main({
+    env,
+    platform: 'linux',
+    args: [],
+    hooks: {
+      versionProbe: async () => {},
+      pluginInventory: async () => ({ permissions: {}, multiCoreEnabled: false }),
+      anthropicAuth: async () => true,
+      discovery: async (factory, selected, options) => {
+        selectedIds = selected;
+        launchedDiscovery = await discoverLaunchProviders(factory, selected, options);
+        return launchedDiscovery;
+      },
+      afterProbes: () => true,
+    },
+  });
+  assert.deepEqual(selectedIds, ['deepseek', 'zai', 'zai-coding-cn', 'strata']);
+  assert.deepEqual(launchedDiscovery?.availableProviderIds, [
+    'deepseek',
+    'zai',
+    'zai-coding-cn',
+    'strata',
+  ]);
+  assert.equal(launchedDiscovery?.genericModels.deepseek?.length, 2);
+  const settings = pickerSettings(
+    false,
+    [],
+    false,
+    [],
+    [],
+    false,
+    launchedDiscovery?.availableProviderIds,
+    launchedDiscovery?.genericModels,
+  );
+  assert.deepEqual(
+    settings.modelPicker.options
+      .filter(({ model: id }) => id.startsWith('multi/deepseek/'))
+      .map(({ model: id }) => id),
+    ['multi/deepseek/deepseek-v4-pro', 'multi/deepseek/deepseek-flash'],
+  );
+  const agents = workerDefinitions(workerCatalog(settings.modelPicker.options));
+  assert.ok(agents['multi-deepseek']);
+  const runtime = launcherRuntime(
+    '',
+    undefined,
+    {},
+    { cursor: undefined, antigravity: undefined, grok: undefined },
+    undefined,
+    launchedDiscovery?.genericModels,
+    createLaunchRegistry,
+    launchedDiscovery?.deepseekKey,
+    launchedDiscovery?.piKeys,
+    launchedDiscovery?.strataBaseUrl,
+  );
+  const descriptor = runtime.registry?.get('deepseek');
+  assert.ok(descriptor?.direct);
+  assert.equal(
+    descriptor.direct.prepare({
+      method: 'POST',
+      pathname: '/v1/messages',
+      body: {
+        model: 'multi/deepseek/deepseek-v4-pro',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      session: 'session',
+      fallbackSession: 'fallback',
+    }).route,
+    'deepseek',
+  );
+});
+
+test('MULTI_MODELS=all picker output stays within the curated DeepSeek allowlist', () => {
+  // Observe the actual post-filter settings passed to the harness, stopping before
+  // permissions, gateway startup, or spawning Claude. Module mocks stay in this child.
+  const fixture = `
+    import assert from 'node:assert/strict';
+    import { mock } from 'node:test';
+    import * as fs from 'node:fs/promises';
+    const stop = new Error('captured caller settings');
+    let settings;
+    mock.module('node:fs/promises', { namedExports: {
+      ...fs,
+      mkdtemp: async () => '/virtual/T051-settings',
+      writeFile: async (file, body) => {
+        assert.equal(file.replaceAll('\\\\', '/'), '/virtual/T051-settings/caller-settings.json');
+        settings = JSON.parse(body);
+        throw stop;
+      },
+    }});
+    const { main } = await import('./plugins/multi-core/src/launcher.ts');
+    await assert.rejects(main({
+      env: {
+        MULTI_MODELS: 'all',
+        MULTI_ENABLED_PROVIDERS: 'pi',
+        DEEPSEEK_API_KEY: 'T051_DEEPSEEK',
+      },
+      platform: 'linux',
+      args: [],
+      hooks: {
+        versionProbe: async () => {},
+        pluginInventory: async () => ({ permissions: {}, multiCoreEnabled: false }),
+        anthropicAuth: async () => true,
+      },
+    }), (error) => error === stop);
+    assert.ok(settings);
+    console.log(JSON.stringify(settings.modelPicker.options));
+  `;
+  const child = spawnSync(
+    process.execPath,
+    ['--experimental-test-module-mocks', '--input-type=module', '-e', fixture],
+    {
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: { ...process.env, MULTI_MODELS: 'all', MULTI_ENABLED_PROVIDERS: 'pi' },
+    },
+  );
+  assert.equal(child.status, 0, child.stdout + child.stderr);
+  const rows = JSON.parse(child.stdout) as { model: string }[];
+  assert.deepEqual(
+    rows.filter(({ model: id }) => id.startsWith('multi/deepseek/')).map(({ model: id }) => id),
+    PI_DEEPSEEK_MODELS.map(({ id }) => `multi/deepseek/${id}`),
+  );
+});
+
+test('an invalid nonblank DeepSeek key does not trigger network access during discovery', async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    throw new Error('unexpected discovery network access');
+  };
+  try {
+    const result = await discoverLaunchProviders(createLaunchRegistry, ['deepseek'], {
+      env: { DEEPSEEK_API_KEY: 'T051_INVALID_KEY' },
+      platform: 'linux',
+    });
+    assert.deepEqual(result.availableProviderIds, ['deepseek']);
+    assert.equal(calls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 test('Strata discovery requires a valid configured address and admits loopback without a key', async () => {
   const noAddressEnv: NodeJS.ProcessEnv = { STRATA_API_KEY: 'fake-strata-key' };
@@ -832,6 +1014,27 @@ test('Zen rejects an explicitly empty key without falling back to the auth file'
     'Zen is not configured. Set OPENCODE_API_KEY or connect OpenCode Zen.',
   );
 });
+
+for (const platform of ['linux', 'win32'] as const) {
+  test(`disabled Pi discovery preserves all six environment sentinels on ${platform}`, async () => {
+    const names = [
+      'DEEPSEEK_API_KEY',
+      'ZAI_API_KEY',
+      'ZAI_CODING_CN_API_KEY',
+      'STRATA_API_KEY',
+      'MULTI_STRATA_BASE_URL',
+      'MULTI_PI_MODELS',
+    ] as const;
+    const env: NodeJS.ProcessEnv = Object.fromEntries(
+      names.map((name) => [name, `T051_SENTINEL_${name}`]),
+    );
+    const before = { ...env };
+    const result = await discoverLaunchProviders(createLaunchRegistry, [], { env, platform });
+    assert.deepEqual(env, before);
+    assert.deepEqual(result.availableProviderIds, []);
+    assert.deepEqual(result.genericModels, {});
+  });
+}
 
 test('launcher discovery and runtime share a registry factory without duplicate registration', async () => {
   const strata = {

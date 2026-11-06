@@ -18,6 +18,7 @@ import { createNativeGateway as createGateway } from '../../plugins/multi-core/s
 import { estimateTextTokens } from '../../plugins/multi-core/src/gateway/tokens.ts';
 import { PI_DEEPSEEK_MODELS, PI_MODELS_BY_PROVIDER } from '../../plugins/multi-pi/src/catalog.ts';
 import { preparePiRequest } from '../../plugins/multi-pi/src/gateway-request.ts';
+import type { PiProviderId } from '../../plugins/multi-pi/src/providers.ts';
 import { encodePiSignature } from '../../plugins/multi-pi/src/signature.ts';
 import { createNativeGateway } from './support/runtime.ts';
 
@@ -268,6 +269,102 @@ for (const pathname of ['/v1/messages', '/v1/messages/count_tokens']) {
     );
   });
 }
+
+async function assertPiWireEffort(
+  providerId: PiProviderId,
+  modelId: string,
+  effort: 'xhigh' | undefined,
+  stream: boolean,
+) {
+  let seen: Record<string, unknown> | undefined;
+  let calls = 0;
+  const prepared = preparePiRequest(
+    input({
+      body: {
+        ...input().body,
+        model: `multi/${providerId}/${modelId}`,
+        stream,
+        ...(effort === undefined
+          ? {}
+          : { thinking: { type: 'adaptive' }, output_config: { effort } }),
+      },
+    }),
+    'fake-key',
+    {
+      providerId,
+      loadBackend: async () => await import('../../plugins/multi-pi/src/backend.ts'),
+    },
+  );
+  const opened = await prepared.open(new AbortController().signal, async (_url, init) => {
+    calls += 1;
+    seen = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    const chunks = [
+      { choices: [{ delta: { role: 'assistant' }, finish_reason: null }] },
+      { choices: [{ delta: { content: 'ok' }, finish_reason: null }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }] },
+    ];
+    return new Response(
+      `${chunks
+        .map(
+          (chunk) => `data: ${JSON.stringify(chunk)}
+
+`,
+        )
+        .join('')}data: [DONE]
+
+`,
+      { headers: { 'content-type': 'text/event-stream' } },
+    );
+  });
+  assert.ok(opened.ok);
+  const deltas: string[] = [];
+  const translated = await opened.translate(
+    stream
+      ? (type, value) => {
+          if (
+            type === 'content_block_delta' &&
+            'delta' in value &&
+            value.delta.type === 'text_delta'
+          ) {
+            deltas.push(value.delta.text);
+          }
+        }
+      : undefined,
+    () => {},
+  );
+  assert.equal(calls, 1);
+  assert.equal(seen?.model, modelId);
+  assert.equal(seen?.reasoning_effort, effort === 'xhigh' ? 'max' : 'high');
+  const expectedNotices =
+    effort === undefined
+      ? []
+      : [`[DeepSeek] DeepSeek ${modelId} does not support effort xhigh; using max.`];
+  const texts = translated.content.flatMap((block) => (block.type === 'text' ? [block.text] : []));
+  assert.deepEqual(
+    texts.filter((text) => text.startsWith('[DeepSeek]')),
+    expectedNotices,
+  );
+  assert.ok(texts.includes('ok'));
+  if (stream) {
+    // These are the real translator's SSE text deltas, not its returned content.
+    assert.deepEqual(
+      deltas.filter((text) => text.startsWith('[DeepSeek]')),
+      expectedNotices,
+    );
+    assert.ok(deltas.includes('ok'));
+  }
+}
+
+test('DeepSeek wire maps xhigh to max with one notice and defaults to high without one', async () => {
+  for (const stream of [true, false]) {
+    await assertPiWireEffort('deepseek', 'deepseek-v4-pro', 'xhigh', stream);
+    for (const [providerId, models] of Object.entries(PI_MODELS_BY_PROVIDER)) {
+      for (const model of models.filter(({ defaultEffort }) => defaultEffort !== undefined)) {
+        await assertPiWireEffort(providerId as PiProviderId, model.id, undefined, stream);
+      }
+    }
+  }
+});
 
 test('Pi open forwards effort, options, gateway fetch and raw usage observer lazily', async () => {
   let seen: Record<string, unknown> | undefined;

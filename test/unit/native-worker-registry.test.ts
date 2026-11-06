@@ -16,6 +16,7 @@ import {
 import { cursorModelOptions } from '../../plugins/multi-cursor/src/models.ts';
 import { parseGrokModels } from '../../plugins/multi-grok/src/models.ts';
 import { MODELS } from '../../plugins/multi-openai/src/models.ts';
+import { PI_MODELS_BY_PROVIDER, toPiModelDescriptors } from '../../plugins/multi-pi/src/catalog.ts';
 import { zenModelOptions } from '../../plugins/multi-zen/src/models.ts';
 
 test('worker catalog derives provider ids and labels from provider facts', () => {
@@ -123,9 +124,11 @@ test('real provider worker catalogs fit the Windows cmd.exe argument budget', ()
     ...cursorRows.map(({ model }) => ({ model })),
     ...antigravity.map(({ model }) => ({ model })),
     ...grok.map(({ model }) => ({ model })),
-    ...['deepseek', 'zai', 'zai-coding-cn', 'strata'].map((provider) => ({
-      model: `multi/${provider}/representative-model`,
-    })),
+    ...Object.entries(PI_MODELS_BY_PROVIDER).flatMap(([provider, models]) =>
+      toPiModelDescriptors(models, provider as 'deepseek' | 'zai' | 'zai-coding-cn' | 'strata').map(
+        ({ identity }) => ({ model: identity.routeId }),
+      ),
+    ),
   ];
   const agents = workerDefinitions(workerCatalog(rows, grok));
   const args = launcherArguments(

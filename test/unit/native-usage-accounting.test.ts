@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   addCanonicalUsage,
@@ -11,6 +12,29 @@ import {
 } from '../../plugins/multi-core/src/gateway/usage-accounting.ts';
 
 const SOURCES: readonly UsageSource[] = ['provider', 'estimate', 'mixed', 'unavailable'];
+
+test('usage accounting has no provider registry or plugin dependency', async () => {
+  const source = await readFile(
+    new URL('../../plugins/multi-core/src/gateway/usage-accounting.ts', import.meta.url),
+    'utf8',
+  );
+  const forbidden =
+    /(?:provider-registry|(?:^|\/)multi-(?:openai|cursor|zen|antigravity|grok|pi)(?:\/|['"]))/;
+  const checkBoundary = (text: string) => {
+    assert.doesNotMatch(text, new RegExp(`from\\s+['"][^'"]*${forbidden.source}`));
+    assert.doesNotMatch(text, new RegExp(`import\\s*\\([^)]*${forbidden.source}`));
+  };
+  checkBoundary(source);
+  for (const specifier of ['../../../multi-pi/src/provider.ts', './provider-registry.ts']) {
+    assert.throws(() => checkBoundary(`import { descriptor } from '${specifier}';`));
+    assert.throws(() => checkBoundary(`export { descriptor } from '${specifier}';`));
+    assert.throws(() => checkBoundary(`import('${specifier}')`));
+  }
+  for (const specifier of ['../../multi-core/src/gateway/messages.ts', './usage-accounting.ts']) {
+    assert.doesNotThrow(() => checkBoundary(`import { helper } from '${specifier}';`));
+    assert.doesNotThrow(() => checkBoundary(`import('${specifier}')`));
+  }
+});
 
 test('cacheReadRatio is token-weighted over uncached input, cache reads and cache writes', () => {
   assert.equal(
