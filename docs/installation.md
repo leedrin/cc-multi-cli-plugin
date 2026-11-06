@@ -14,7 +14,7 @@
 - OpenAI: the official Codex CLI (`codex`) and a ChatGPT login.
 - Cursor: the official Cursor SDK login. No separate Cursor CLI is required.
 - OpenCode Zen: a Zen API key in OpenCode's auth store or `OPENCODE_API_KEY`.
-- DeepSeek and GLM: provider-specific API keys in the environment of the terminal launching Multi; see [DeepSeek and GLM via Pi](pi.md).
+- DeepSeek and GLM: provider-specific API keys in the environment of the terminal launching Multi. Strata: set `MULTI_STRATA_BASE_URL`, with `STRATA_API_KEY` required except for loopback addresses. See [DeepSeek, GLM and Strata via Pi](pi.md).
 - Antigravity: the official `agy` CLI and its native login.
 - Grok: the official Grok Build CLI (`grok`) and its account login.
 
@@ -65,7 +65,7 @@ that name; re-run with `--command claude-multi` to restore the default. Setting
 launch. Model IDs are listed in each provider's documentation.
 
 The default picker shows four OpenAI, three Cursor, five Zen, two DeepSeek, and four GLM models when those
-providers are connected. A model absent from these defaults can be selected with
+providers are connected. Strata is opt-in through `MULTI_STRATA_BASE_URL` and is listed when configured. A model absent from these defaults can be selected with
 its full ID using `--models`; the full connected catalog remains available for
 explicit selection. Use `--cursor-models` or `--zen-models` to inspect IDs. To add
 one model, run `/multi-core:setup --models +multi/zen/glm-5.2`. With no
@@ -74,7 +74,7 @@ saved selection, this extends the curated defaults. Re-running setup without
 existing installations with no saved selection keep the curated defaults.
 
 Each connected provider gets exactly one Agent-tool worker type (`multi-openai`,
-`multi-zen`, `multi-deepseek`, `multi-zai`, `multi-zai-coding-cn`, `multi-cursor`, `multi-antigravity`, `multi-grok`), and a type's
+`multi-zen`, `multi-deepseek`, `multi-zai`, `multi-zai-coding-cn`, `multi-strata`, `multi-cursor`, `multi-antigravity`, `multi-grok`), and a type's
 models are exactly its provider's rows in this selection: the Agent tool's
 `model` parameter names one of them, as a short id (`kimi-k3`) or the full
 `multi/zen/kimi-k3` id. A model absent from the selection is refused when a
@@ -88,6 +88,7 @@ worker requests it; add it to `--models` and relaunch to make it selectable.
 | Cursor | `/multi-cursor:login` | Official Cursor SDK browser login |
 | OpenCode Zen | `/multi-zen:connect` | OpenCode auth or an API key |
 | DeepSeek | Set `DEEPSEEK_API_KEY` before launch | Environment variable; no interactive connect command |
+| Strata | Set `MULTI_STRATA_BASE_URL` before launch | `STRATA_API_KEY` required except for loopback addresses |
 | Antigravity | `/multi-antigravity:connect` | The official `agy` login and scoped hook |
 | Grok | `/multi-grok:login` | The official Grok Build account login |
 

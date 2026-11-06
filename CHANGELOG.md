@@ -6,7 +6,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for current direction and
 
 ## Unreleased
 
-- Document DeepSeek setup, model selection, execution limits, and measured Pi dependency disk use in [docs/pi.md](docs/pi.md).
+- Document DeepSeek, GLM, and Strata setup, model selection, execution limits, usage, and measured Pi dependency disk use in [docs/pi.md](docs/pi.md). Strata is enabled by `MULTI_STRATA_BASE_URL`; its offline-only verification does not block the milestone.
 
 - **Isolate provider keys during startup probing.** Claude plugin-list probes no longer receive provider API keys in their child-process environment.
 
