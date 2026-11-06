@@ -55,13 +55,13 @@
 - [x] 6.6 MP-0603：`src/stream.ts`：按 delta 生成块、签名在关闭时发出、`thinking_end` 改写签名时失败、工具调用完整后才发出并 `stripWorkerModel`、`argumentsError` 显式失败（金丝雀断言）、停止原因映射、未支持签名字段失败、错误不含响应体；用真实事件顺序 fixture 离线通过
 - [x] 6.7 MP-0604：`src/usage.ts` 从原始 chunk 构建 canonical usage（`prompt_cache_hit_tokens`、`choices[0].usage`、无 usage → `unavailable`、显式 0 → 0），不使用 Pi 的 usage 和 cost；receipt 与 `/multi-usage` 一致，配额行显示 unavailable 和原因
 - [x] 6.8 `src/gateway-request.ts` 接入 Direct 契约；count_tokens 返回带估算标记的本地值且不加载 Pi；权限测试：plan 拒绝、auto 带 statement `no auto mode: actions run unreviewed`
-- [ ] 6.9 安全测试：金丝雀 key 跑完整流程后不出现在事件、receipt、trace、错误、`gatewayEnvironment`、harness env；新增 `test:live:pi` 脚本（默认不运行）
-- [ ] 6.10 新增 `docs/pi.md`（启用、key、模型、局限、磁盘代价、环境变量被删除）；更新 `AGENTS.md`（代码地图、Orientation、执行约定、Verification 表的 `test:live:pi`）、`README.md`、`ARCHITECTURE.md`、`docs/platform-support.md`、`docs/permissions.md`、`docs/installation.md`；`CHANGELOG.md` 记录 DeepSeek 支持；`npm run check` 与 `npm run test:mod` 通过
+- [x] 6.9 安全测试：金丝雀 key 跑完整流程后不出现在事件、receipt、trace、错误、`gatewayEnvironment`、harness env；新增 `test:live:pi` 脚本（默认不运行）
+- [x] 6.10 新增 `docs/pi.md`（启用、key、模型、局限、磁盘代价、环境变量被删除）；更新 `AGENTS.md`（代码地图、Orientation、执行约定、Verification 表的 `test:live:pi`）、`README.md`、`ARCHITECTURE.md`、`docs/platform-support.md`、`docs/permissions.md`、`docs/installation.md`；`CHANGELOG.md` 记录 DeepSeek 支持；`npm run check` 与 `npm run test:mod` 通过
 
 ## 7. P5b GLM（MP-0605）
 
 - [x] 7.1 catalog 加入 `zai` 与 `zai-coding-cn`，backend 只 import 对应 provider 工厂；`multi/zai/...` 不被当成 `multi/zai-coding-cn/...`；单测通过
-- [ ] 7.2 录制 fixture 覆盖 `zaiToolStream` 与 GLM thinking 字段、`zai` 的 effort wire 字段；离线测试通过
+- [x] 7.2 录制 fixture 覆盖 `zaiToolStream` 与 GLM thinking 字段、`zai` 的 effort wire 字段；离线测试通过
 - [ ] 7.3 更新 `docs/pi.md` 的 GLM 端点差异与 `CHANGELOG.md`；`npm run check` 通过
 
 ## 8. P5c Strata（DD §16.1）
