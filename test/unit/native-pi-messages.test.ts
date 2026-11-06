@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import type { AssistantMessageEvent } from '@earendil-works/pi-ai';
+import type { MessagesRequest } from '../../plugins/multi-core/src/gateway/messages.ts';
+import { toolName } from '../../plugins/multi-core/src/gateway/tools.ts';
 import { PI_DEEPSEEK_MODELS, PI_MODELS_BY_PROVIDER } from '../../plugins/multi-pi/src/catalog.ts';
 import { toPiContext } from '../../plugins/multi-pi/src/messages.ts';
 import { encodePiSignature } from '../../plugins/multi-pi/src/signature.ts';
+import { translatePiStream } from '../../plugins/multi-pi/src/stream.ts';
 
 const route = 'multi/deepseek/deepseek-flash';
 const model = PI_DEEPSEEK_MODELS[1];
@@ -370,6 +374,168 @@ test('Pi translation separates tool aliases and call IDs and preserves tool resu
   assert.equal(success.isError, false);
   assert.deepEqual(success.content, [{ type: 'text', text: 'ok' }]);
   assert.deepEqual(translated.options.toolChoice, { type: 'function', function: { name: alias } });
+});
+
+test('Pi tool aliases remain distinct from reserved-prefix tool names and round-trip', async () => {
+  const longName = `mcp__server__${'a'.repeat(80)}`;
+  const reservedName = toolName(longName);
+  const declared = [longName, reservedName];
+  const request = {
+    messages: [],
+    tools: declared.map((name) => ({ name, input_schema: { type: 'object' } })),
+  };
+  const translated = toPiContext(request, model, route);
+  const wireNames = translated.context.tools?.map(({ name }) => name) ?? [];
+  assert.equal(wireNames.length, 2);
+  assert.notEqual(wireNames[0], wireNames[1]);
+
+  const base = {
+    role: 'assistant' as const,
+    content: [],
+    api: 'openai-completions' as const,
+    provider: 'deepseek' as const,
+    model: 'deepseek-flash',
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: 'stop' as const,
+    timestamp: 0,
+  };
+  const events = [
+    { type: 'start', partial: base },
+    ...wireNames.map((name, index) => ({
+      type: 'toolcall_end',
+      contentIndex: index,
+      partial: base,
+      toolCall: { type: 'toolCall', id: `call-${index}`, name, arguments: { index } },
+    })),
+    { type: 'done', reason: 'toolUse', message: { ...base, content: [] } },
+  ] as unknown as AssistantMessageEvent[];
+  const first = events[0];
+  assert.ok(first);
+  const response = await translatePiStream(
+    {
+      first,
+      stream: {
+        async *[Symbol.asyncIterator]() {
+          yield* events.slice(1);
+        },
+      },
+    },
+    { routeId: route, label: 'DeepSeek', model: route, request },
+    () => {},
+  );
+  const responseTools = response.content.filter((block) => block.type === 'tool_use');
+  assert.deepEqual(responseTools, [
+    { type: 'tool_use', id: 'call-0', name: longName, input: { index: 0 } },
+    { type: 'tool_use', id: 'call-1', name: reservedName, input: { index: 1 } },
+  ]);
+  const replay = toPiContext(
+    {
+      ...request,
+      messages: [
+        {
+          role: 'assistant',
+          content: responseTools.map(({ id, name, input }) => ({
+            type: 'tool_use',
+            id,
+            name,
+            input,
+          })),
+        },
+        {
+          role: 'user',
+          content: responseTools.map(({ id, name }) => ({
+            type: 'tool_result',
+            tool_use_id: id,
+            content: `result for ${name}`,
+          })),
+        },
+      ],
+    },
+    model,
+    route,
+  );
+  const replayedAssistant = replay.context.messages[0];
+  const replayedResults = replay.context.messages.filter(
+    (message) => message.role === 'toolResult',
+  );
+  assert.equal(replayedAssistant?.role, 'assistant');
+  if (replayedAssistant?.role !== 'assistant') {
+    throw new Error('expected replayed assistant tool calls');
+  }
+  assert.deepEqual(
+    replayedAssistant.content,
+    wireNames.map((name, index) => ({
+      type: 'toolCall',
+      id: `call-${index}`,
+      name,
+      arguments: { index },
+    })),
+  );
+  assert.deepEqual(
+    replayedResults.map((message) => message.role === 'toolResult' && message.toolName),
+    wireNames,
+  );
+});
+
+test('Pi deferred tool declarations are loaded only by references, selection, or use', () => {
+  const deferred = {
+    name: 'deferred_search',
+    defer_loading: true,
+    input_schema: { type: 'object' },
+  };
+  const always = { name: 'always_search', input_schema: { type: 'object' } };
+  const names = (request: MessagesRequest) =>
+    toPiContext(request, model, route).context.tools?.map(({ name }) => name) ?? [];
+  assert.deepEqual(names({ messages: [], tools: [always, deferred] }), ['always_search']);
+  assert.deepEqual(
+    names({
+      messages: [
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'old', name: 'deferred_search', input: {} }],
+        },
+      ],
+      tools: [always, deferred],
+    }),
+    ['always_search', 'deferred_search'],
+  );
+  assert.deepEqual(
+    names({
+      messages: [],
+      tools: [always, deferred],
+      tool_choice: { type: 'tool', name: 'deferred_search' },
+    }),
+    ['always_search', 'deferred_search'],
+  );
+  assert.deepEqual(
+    names({
+      messages: [
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'old', name: 'always_search', input: {} }],
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'old',
+              content: [{ type: 'tool_reference', tool_name: 'deferred_search' }],
+            },
+          ],
+        },
+      ],
+      tools: [always, deferred],
+    }),
+    ['always_search', 'deferred_search'],
+  );
 });
 
 test('Pi thinking merges only adjacent blocks with matching signature metadata', () => {

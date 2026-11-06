@@ -1,9 +1,20 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { AssistantMessageEvent } from '@earendil-works/pi-ai';
-import { createBuiltinRegistry } from '../../plugins/multi-core/src/gateway/builtin-providers.ts';
-import type { ContentBlock } from '../../plugins/multi-core/src/gateway/messages.ts';
+import {
+  BUILTIN_PROVIDERS,
+  createBuiltinRegistry,
+} from '../../plugins/multi-core/src/gateway/builtin-providers.ts';
+import type {
+  ContentBlock,
+  MessagesResponse,
+} from '../../plugins/multi-core/src/gateway/messages.ts';
+import {
+  ProviderRegistry,
+  ProviderRuntime,
+} from '../../plugins/multi-core/src/gateway/provider-registry.ts';
 import type { ProviderRequestInput } from '../../plugins/multi-core/src/gateway/provider-request.ts';
+import { createNativeGateway as createGateway } from '../../plugins/multi-core/src/gateway/server.ts';
 import { estimateTextTokens } from '../../plugins/multi-core/src/gateway/tokens.ts';
 import { PI_DEEPSEEK_MODELS, PI_MODELS_BY_PROVIDER } from '../../plugins/multi-pi/src/catalog.ts';
 import { preparePiRequest } from '../../plugins/multi-pi/src/gateway-request.ts';
@@ -308,6 +319,173 @@ test('Pi open forwards effort, options, gateway fetch and raw usage observer laz
     cache_read_input_tokens: 5,
   });
   assert.equal(translated.multi_usage?.source, 'provider');
+});
+
+test('a registered fake provider receives and completes its routed model request', async (t) => {
+  const fakeRegistry = new ProviderRegistry();
+  fakeRegistry.registerMany(BUILTIN_PROVIDERS.filter(({ id }) => id !== 'strata'));
+  const strata = BUILTIN_PROVIDERS.find(({ id }) => id === 'strata');
+  assert.ok(strata?.direct);
+  fakeRegistry.register(strata);
+  const modelDescriptor = {
+    identity: {
+      providerId: 'strata',
+      modelId: 'dispatch-fixture',
+      routeId: 'multi/strata/dispatch-fixture',
+      oneMillionContext: false,
+    },
+    label: 'Dispatch fixture',
+    description: 'Fake direct model',
+    protocol: 'custom' as const,
+    capabilities: { text: true },
+  };
+  let prepareCalls = 0;
+  let openCalls = 0;
+  const expected: MessagesResponse = {
+    id: 'fake-dispatch',
+    type: 'message',
+    role: 'assistant',
+    model: 'dispatch-fixture',
+    content: [{ type: 'text', text: 'fake provider dispatched' }],
+    stop_reason: 'end_turn',
+    stop_sequence: null,
+    usage: { input_tokens: 1, output_tokens: 2 },
+  };
+  strata.direct = {
+    ...strata.direct,
+    prepare: () => {
+      prepareCalls += 1;
+      return {
+        label: 'Fake Strata',
+        authHelp: '',
+        endpoint: 'fixture',
+        route: 'strata',
+        inputTokens: () => 1,
+        requestEvent: () => ({ route: 'strata' }),
+        failureEvent: () => ({ route: 'strata' }),
+        open: async () => {
+          openCalls += 1;
+          return { ok: true, translate: async () => expected };
+        },
+      };
+    },
+  };
+  const server = createGateway({
+    token: 'fake-dispatch-token',
+    runtime: new ProviderRuntime([{ descriptor: strata, models: [modelDescriptor] }], {
+      registry: fakeRegistry,
+    }),
+  });
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  assert(address && typeof address === 'object');
+  const response = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-multi-gateway-token': 'fake-dispatch-token' },
+    body: JSON.stringify({
+      model: modelDescriptor.identity.routeId,
+      messages: [{ role: 'user', content: 'dispatch' }],
+    }),
+  });
+  assert.equal(response.status, 200);
+  const actual = (await response.json()) as MessagesResponse;
+  assert.deepEqual(actual.content, expected.content);
+  assert.equal(prepareCalls, 1);
+  assert.equal(openCalls, 1);
+});
+
+test('the same Pi request produces byte-identical upstream bodies with complete tool history', async () => {
+  const longName = `mcp__fixture__${'search'.repeat(12)}`;
+  const body = {
+    ...input().body,
+    system: [{ type: 'text', text: 'cached system', cache_control: { type: 'ephemeral' } }],
+    // DD §12.3 follows toChat: supplied sampling parameters are not forwarded.
+    temperature: 0.37,
+    top_p: 0.63,
+    top_k: 17,
+    tools: [
+      {
+        name: longName,
+        input_schema: { type: 'object', properties: { query: { type: 'string' } } },
+      },
+    ],
+    messages: [
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'call-1', name: longName, input: { query: 'stable' } }],
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'call-1',
+            content: [
+              { type: 'text', text: 'result' },
+              { type: 'tool_reference', tool_name: longName },
+            ],
+          },
+          { type: 'text', text: 'continue', cache_control: { type: 'ephemeral' } },
+        ],
+      },
+    ],
+  };
+  const wireBodies: string[] = [];
+  for (let index = 0; index < 2; index += 1) {
+    const prepared = preparePiRequest(input({ body }), 'fake-key', {
+      loadBackend: async () => await import('../../plugins/multi-pi/src/backend.ts'),
+    });
+    const opened = await prepared.open(new AbortController().signal, async (_url, init) => {
+      wireBodies.push(String(init?.body));
+      const payloads = [
+        { id: 'stable', choices: [{ delta: { role: 'assistant' }, finish_reason: null }] },
+        { id: 'stable', choices: [{ delta: { content: 'answer' }, finish_reason: null }] },
+        { id: 'stable', choices: [{ delta: {}, finish_reason: 'stop' }] },
+      ];
+      const separator = String.fromCharCode(10);
+      const sse = `${payloads.map((payload) => `data: ${JSON.stringify(payload)}${separator}${separator}`).join('')}data: [DONE]${separator}${separator}`;
+      return new Response(sse, { status: 200 });
+    });
+    assert.equal(opened.ok, true);
+    if (opened.ok) {
+      await opened.translate(undefined, () => {});
+    }
+  }
+  assert.equal(wireBodies.length, 2);
+  assert.equal(wireBodies[0], wireBodies[1]);
+  assert(!wireBodies[0]?.includes('cache_control'));
+  const payload = JSON.parse(wireBodies[0] ?? 'null') as {
+    temperature?: unknown;
+    top_p?: unknown;
+    top_k?: unknown;
+    tools?: Array<{ function?: { strict?: boolean; name?: string } }>;
+    messages?: Array<{
+      tool_calls?: Array<{ function?: { name?: string } }>;
+      content?: string | Array<{ text?: string }>;
+    }>;
+  };
+  const alias = payload.tools?.[0]?.function?.name;
+  assert.match(alias ?? '', /^multi_tool_[a-f0-9]{48}$/);
+  assert.equal(payload.tools?.[0]?.function?.strict, false);
+  assert.equal(payload.temperature, undefined);
+  assert.equal(payload.top_p, undefined);
+  assert.equal(payload.top_k, undefined);
+  assert.equal(
+    payload.messages?.find(({ tool_calls }) => tool_calls)?.tool_calls?.[0]?.function?.name,
+    alias,
+  );
+  assert(
+    JSON.stringify(payload.messages).includes(`Available tool: ${alias}`),
+    'tool_reference should be rendered as an available-tool text block',
+  );
+  assert(!wireBodies[0]?.includes('timestamp'));
 });
 
 test('real Pi SDK usage chunks reach translated gateway usage', async () => {

@@ -120,6 +120,169 @@ function providerSse(events: unknown[]): Response {
   });
 }
 
+test('Pi gateway maps stream 401 to credential help before emitting any SSE content', async (t) => {
+  let calls = 0;
+  const fixture = await start(async () => {
+    calls += 1;
+    return new Response('UPSTREAM_AUTH_DETAIL', { status: 401 });
+  });
+  t.after(async () => {
+    fixture.server.closeAllConnections();
+    await new Promise<void>((resolve) => fixture.server.close(() => resolve()));
+  });
+  const response = await call(fixture.url, { ...baseBody, stream: true });
+  const text = await response.text();
+  assert.equal(response.status, 401);
+  assert.match(text, /DEEPSEEK_API_KEY/);
+  assert.doesNotMatch(text, /UPSTREAM_AUTH_DETAIL/);
+  assert.doesNotMatch(
+    text,
+    /event: (message_start|content_block_start|content_block_delta|message_delta|message_stop)/,
+  );
+  assert.equal(calls, 1);
+});
+
+test('Pi gateway emits exactly one terminal pair with response usage at EOF', async (t) => {
+  const fixture = await start(async () =>
+    providerSse([
+      { choices: [{ delta: { role: 'assistant' }, finish_reason: null }] },
+      { choices: [{ delta: { content: 'complete' }, finish_reason: null }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }] },
+      { choices: [], usage: { prompt_tokens: 12, completion_tokens: 3 } },
+    ]),
+  );
+  t.after(async () => {
+    fixture.server.closeAllConnections();
+    await new Promise<void>((resolve) => fixture.server.close(() => resolve()));
+  });
+  const response = await call(fixture.url, { ...baseBody, stream: true });
+  const text = await response.text();
+  assert.equal(response.status, 200);
+  const lines = text.split('\n');
+  const events = lines
+    .filter((line) => line.startsWith('event: '))
+    .map((line) => line.slice('event: '.length));
+  assert.equal(events.filter((name) => name === 'message_delta').length, 1);
+  assert.equal(events.filter((name) => name === 'message_stop').length, 1);
+  assert.equal(events.at(-1), 'message_stop');
+  const deltaLine = lines.indexOf('event: message_delta');
+  const delta = JSON.parse(lines[deltaLine + 1]?.slice('data: '.length) ?? '{}');
+  assert.equal(delta?.delta?.stop_reason, 'end_turn');
+  assert.deepEqual(delta?.usage, { input_tokens: 12, output_tokens: 3 });
+});
+
+test('Pi gateway rejects document and Strata image inputs before backend loading or fetch', async (t) => {
+  let documentLoads = 0;
+  let documentFetches = 0;
+  const documentRegistry = createBuiltinRegistry();
+  const documentDescriptor = documentRegistry.get('deepseek');
+  assert.ok(documentDescriptor?.direct);
+  documentDescriptor.direct.prepare = (request) =>
+    preparePiRequest(request, canary, {
+      loadBackend: async () => {
+        documentLoads += 1;
+        return await import('../../plugins/multi-pi/src/backend.ts');
+      },
+    });
+  const documentServer = createNativeGateway({
+    runtime: new ProviderRuntime([{ descriptor: documentDescriptor, models: [] }], {
+      registry: documentRegistry,
+    }),
+    token,
+    fetchImpl: async () => {
+      documentFetches += 1;
+      return new Response();
+    },
+  });
+  await new Promise<void>((resolve, reject) => {
+    documentServer.once('error', reject);
+    documentServer.listen(0, '127.0.0.1', resolve);
+  });
+  const documentAddress = documentServer.address();
+  assert(documentAddress && typeof documentAddress === 'object');
+  const documentFixture = {
+    server: documentServer,
+    url: `http://127.0.0.1:${documentAddress.port}`,
+  };
+  t.after(async () => {
+    documentFixture.server.closeAllConnections();
+    await new Promise<void>((resolve) => documentFixture.server.close(() => resolve()));
+  });
+  const documentResponse = await call(documentFixture.url, {
+    ...baseBody,
+    messages: [
+      {
+        role: 'user',
+        content: [{ type: 'document', source: { type: 'text', data: 'PRIVATE_DOCUMENT_CONTENT' } }],
+      },
+    ],
+  });
+  const documentError = await documentResponse.text();
+  assert.equal(documentResponse.status, 400);
+  assert.match(documentError, /document/i);
+  assert.doesNotMatch(documentError, /PRIVATE_DOCUMENT_CONTENT/);
+  assert.equal(documentLoads, 0);
+  assert.equal(documentFetches, 0);
+
+  const strataRegistry = createBuiltinRegistry({
+    piKeys: { strata: 'local' },
+    strataBaseUrl: 'http://127.0.0.1:8321/v1',
+  });
+  const strataDescriptor = strataRegistry.get('strata');
+  assert.ok(strataDescriptor?.direct);
+  const strataRuntime = new ProviderRuntime([{ descriptor: strataDescriptor, models: [] }], {
+    registry: strataRegistry,
+  });
+  let imageLoads = 0;
+  let imageFetches = 0;
+  strataDescriptor.direct.prepare = (request) =>
+    preparePiRequest(request, 'local', {
+      providerId: 'strata',
+      baseUrl: 'http://127.0.0.1:8321/v1',
+      loadBackend: async () => {
+        imageLoads += 1;
+        return await import('../../plugins/multi-pi/src/backend.ts');
+      },
+    });
+  const strataServer = createNativeGateway({
+    runtime: strataRuntime,
+    token,
+    fetchImpl: async () => {
+      imageFetches += 1;
+      return new Response();
+    },
+  });
+  await new Promise<void>((resolve, reject) => {
+    strataServer.once('error', reject);
+    strataServer.listen(0, '127.0.0.1', resolve);
+  });
+  t.after(async () => {
+    strataServer.closeAllConnections();
+    await new Promise<void>((resolve) => strataServer.close(() => resolve()));
+  });
+  const address = strataServer.address();
+  assert(address && typeof address === 'object');
+  const imageResponse = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-multi-gateway-token': token },
+    body: JSON.stringify({
+      model: 'multi/strata/qwen3.8-flash-next',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aGk=' } },
+          ],
+        },
+      ],
+    }),
+  });
+  assert.equal(imageResponse.status, 400);
+  assert.match(await imageResponse.text(), /image/i);
+  assert.equal(imageLoads, 0);
+  assert.equal(imageFetches, 0);
+});
+
 test('Pi full-flow security canary stays out of gateway outputs and errors', async (t) => {
   const originalEnv = { ...process.env };
   process.env.DEEPSEEK_API_KEY = canary;

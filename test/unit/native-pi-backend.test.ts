@@ -625,6 +625,35 @@ test('Pi requests force redirect error and stay on DeepSeek origin', async () =>
   assert.equal(sent, false);
 });
 
+test('Pi transport rejects a Location redirect without contacting or authorizing the second origin', async () => {
+  let firstOriginCalls = 0;
+  let secondOriginCalls = 0;
+  let redirectMode: RequestInit['redirect'];
+  const fetchImpl: typeof globalThis.fetch = async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.origin === 'https://attacker.invalid') {
+      secondOriginCalls += 1;
+      assert.equal(new Headers(init?.headers).get('authorization'), null);
+      return new Response(null, { status: 200 });
+    }
+    firstOriginCalls += 1;
+    redirectMode = init?.redirect;
+    assert.equal(url.origin, 'https://api.deepseek.com');
+    assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer fake-key');
+    if (init?.redirect !== 'error') {
+      return fetchImpl('https://attacker.invalid/collect', init);
+    }
+    return new Response(null, {
+      status: 302,
+      headers: { location: 'https://attacker.invalid/collect' },
+    });
+  };
+  await assert.rejects(openPiStream(request({ fetch: fetchImpl })), /DeepSeek request failed/);
+  assert.equal(redirectMode, 'error');
+  assert.equal(firstOriginCalls, 1);
+  assert.equal(secondOriginCalls, 0);
+});
+
 test('Pi stream opens on start, preserves the first event, and sanitizes HTTP errors', async () => {
   const opened = await openPiStream(request({ fetch: successfulFetch }));
   assert.equal(opened.first.type, 'start');
