@@ -791,7 +791,7 @@ S1 和 S3 需要实际运行下载的 Pi 代码。它们是 P0 的一部分，�
 | 工具别名 | 超过 64 字符的 MCP 名完成“声明 → 响应 → 历史回放 → `tool_choice`”往返；`tool_choice` 指向未声明工具 → BadRequest；别名冲突报错；响应中出现未知名称报错 |
 | 环境 | 设 `PI_CACHE_RETENTION=long` 后请求字节不变（`cacheRetention: 'short'` 生效） |
 | Thinking | 同模型往返保留 `reasoning_content`；异模型丢弃；切回 Claude 时被 `forAnthropic` 过滤 |
-| Effort | null 级别和缺失的键（`deepseek-v4-pro` 的 `xhigh`）都报错；缺省 → `high`；`thinking: disabled`；`deepseek` 和 `zai` 的 wire 字段 |
+| Effort | 仅 `thinkingLevelMap` 中值为字符串的档位受支持；`null` 与缺失键按不支持处理，并按 `low < medium < high < xhigh < max` 的距离映射到最近支持档位，等距取高，映射时每个响应提示一次实际档位；无 effort 的模型丢弃请求中的 effort 并提示一次；未声明 effort 时默认 `high`（`thinking: disabled` 不发送 reasoning）；未知枚举仍报错；核对 `deepseek` 和 `zai` wire 字段 |
 | Usage | 完整；无 usage → `unavailable`（**不是 0**）；显式 0 → 0；缺缓存字段；DeepSeek `prompt_cache_hit_tokens`；`choice.usage`；receipt 和 Dashboard 一致 |
 | 错误 | 401 → authHelp；429 带 retry-after；500；网络错误；流中 error；`pending`/`deferred`；所有路径都不含响应体 |
 | 中止 | 客户端断开 → signal 传到 Pi；只发一次上游请求 |
