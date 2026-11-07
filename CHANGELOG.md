@@ -4,7 +4,15 @@ Entries record changes when they were made, including superseded decisions.
 See [ARCHITECTURE.md](ARCHITECTURE.md) for current direction and
 [README.md](README.md) for current capabilities.
 
-## Unreleased
+## 0.4.1-pi.2 — 2026-11-07
+
+Read Pi provider credentials from Pi config
+
+- **Read DeepSeek, GLM and Strata credentials from Pi config.** When a provider's environment variable is unset, the launcher reads keys (and Strata's base URL) from `~/.pi/agent/auth.json` and `models.json`, or `PI_CODING_AGENT_DIR`; environment variables still win. `models.json` entries map by upstream `baseUrl`, `!command` values fail without running, different keys for one provider fail at launch, and `MULTI_PI_CONFIG=0` turns it off. This replaces the rule that Multi never reads Pi files.
+
+## 0.4.1-pi.1 — 2026-11-07
+
+Multi-provider v2 preview: DeepSeek, GLM and Strata via Pi
 
 - **Identify disabled provider plugins in gateway errors.** Rejections name the owning plugin and provider without sending a request upstream.
 - **Resolve Strata's changing upstream model name per request.** The stable `qwen3.8-flash-next` picker identity maps to the matching listed model or the sole loaded model; GLM Coding CN's opt-in live check uses and reports `high` effort.
