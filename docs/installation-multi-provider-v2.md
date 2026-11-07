@@ -383,10 +383,15 @@ Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $v2Core.installPath 'plug
 | 用的不是想要的密钥 | 环境变量没设置，Multi 用了 Pi 配置中的密钥 | 看启动时打印的 `credentials from Pi config` 行；设置环境变量即可覆盖 |
 | HTTP 403 认证失败 | 密钥无效，或账户没有开通对应套餐 | 按报错中的凭据提示检查；GLM 需要 coding-plan 账户 |
 
-## 10. 发布到 GitHub（可选）
+## 10. 分发到其他设备（可选）
 
-只有在需要让其他机器从 GitHub 安装时，才需要这一步。
-步骤与 Usage 文档第 4.1 节相同，只是把分支名换成 `feature/multi-provider-v2`：
+只有在需要让其他设备安装 v2 时，才需要这一节。
+v2 只在 fork 的 `feature/multi-provider-v2` 分支上，不合并到 `main`。
+本地 `main` 只用来跟踪上游 `greenpolo/cc-multi-cli-plugin`。
+
+### 10.1 在本机推送分支
+
+以下为**本机终端命令**：
 
 ```powershell
 git status --short
@@ -394,8 +399,39 @@ git push -u origin feature/multi-provider-v2
 git ls-remote --heads origin feature/multi-provider-v2
 ```
 
-推送前，确认暂存区和提交中没有密钥、根目录的 `{}` 或本机临时文件。
-推送后，其他机器在 **Claude Code 会话内**执行：
+推送前先确认以下几点：
+- 提交里没有密钥。
+- 提交里没有根目录的 `{}`、`test/test.html`、`_tickets/`、`.claude/agents/` 或本机临时文件。
+- 推送后，提交的作者邮箱会公开。
+
+### 10.2 方法 A：克隆后从本地目录安装（推荐）
+
+这和本机的安装方式一致，已经验证可用。
+以下为**另一台设备上的 PowerShell 命令**，目录 `D:/cc-multi-cli-plugin` 可以换成任意路径：
+
+```powershell
+git clone -b feature/multi-provider-v2 https://github.com/leedrin/cc-multi-cli-plugin.git D:/cc-multi-cli-plugin
+Set-Location D:/cc-multi-cli-plugin
+npm.cmd ci
+Test-Path -LiteralPath 'node_modules/@earendil-works/pi-ai/package.json'   # 必须返回 True
+claude.exe plugin marketplace add 'D:/cc-multi-cli-plugin' --scope user
+claude.exe plugin install multi-pi@cc-multi-cli-plugin --scope user
+claude.exe plugin install multi-openai@cc-multi-cli-plugin --scope user   # 按需安装
+```
+
+必须先运行 `npm.cmd ci`，再安装插件。原因见第 3 节：安装时 Claude Code 会把仓库里的
+`node_modules` 一起复制进插件缓存，Pi provider 运行时从缓存加载 `pi-ai`。
+
+然后按第 4.4 节传入 `$env:PROFILE`，启动 Claude Code，在会话内执行：
+
+```text
+/reload-plugins
+/multi-core:setup --command claude-multi
+```
+
+### 10.3 方法 B：直接从 GitHub 安装
+
+在另一台设备的 **Claude Code 会话内**执行：
 
 ```text
 /plugin marketplace add leedrin/cc-multi-cli-plugin#feature/multi-provider-v2
@@ -404,8 +440,31 @@ git ls-remote --heads origin feature/multi-provider-v2
 /multi-core:setup --command claude-multi
 ```
 
-如果那台机器上已经有同名 marketplace，先按 Usage 文档第 2 节换源，
-在来源设置中写上 `"ref": "feature/multi-provider-v2"`。
+如果那台设备上已经有同名 marketplace，先按 Usage 文档第 2 节换源，
+并在来源设置中写上 `"ref": "feature/multi-provider-v2"`。
+
+**这种方式还没有验证过。** `node_modules` 不在 git 里。
+如果 Claude Code 从 GitHub 安装时没有安装依赖，缓存里就没有 `pi-ai`，Pi provider 无法使用。
+所以装完后一定要按第 8.1 节运行三条 `Test-Path`。
+`node_modules/@earendil-works/pi-ai/package.json` 返回 `False` 时，先卸载，再改用方法 A。
+
+### 10.4 每台设备都要单独准备
+
+- **Node**：24.12 或更新版本。
+- **凭据**：在那台设备上准备 `~/.pi/agent/auth.json` 和 `models.json`（见第 5.1 节），或者设置第 5 节的环境变量。不要把密钥提交进仓库，也不要通过 git 传过去。
+- **Strata**：那台设备要自己按第 7 节运行 Strata 服务。
+  - 先启动 Strata，再启动 `claude-multi`。否则 Strata 请求会返回 502 `Strata /models request failed`。
+  - 端口和 `models.json` 里 `strata.baseUrl` 不一致时，用 `MULTI_STRATA_BASE_URL` 覆盖。
+- **其他 provider**：Codex、Cursor 等需要在那台设备上各自登录。
+- **验证**：按第 8 节检查。
+
+### 10.5 以后更新
+
+1. 在本机按第 4.1 节生成新版本，例如 `npm.cmd run release -- 0.4.1-pi.3`，然后提交并推送分支。
+2. 在其他设备上更新：
+   - 方法 A：先在克隆目录里运行 `git pull` 和 `npm.cmd ci`，然后运行 `claude.exe plugin marketplace update cc-multi-cli-plugin`，再对每个已安装的插件运行 `claude.exe plugin update <插件>@cc-multi-cli-plugin --scope user`。
+   - 方法 B：直接运行上面两条 `marketplace update` 和 `plugin update` 命令。
+3. 两种方法最后都要按第 4.4 节重跑 setup。
 
 ## 11. 回滚与卸载
 
