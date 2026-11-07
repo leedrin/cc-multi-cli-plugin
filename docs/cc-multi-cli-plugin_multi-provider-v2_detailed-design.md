@@ -72,7 +72,7 @@ export DEEPSEEK_API_KEY=...       # 或 ZAI_API_KEY / ZAI_CODING_CN_API_KEY
 | D-B | 顺序：基线 → Identity → Registry → Direct 契约 → launcher/worker → Pi AI。Generic 不再是 Pi 的前置 | Pi 是唯一被点名的目标。保留 PRD“Registry 稳定前不接 Pi”的纪律（§70/§80：否则分不清 Pi 的 bug 和重构的 bug） |
 | D-C | `openai`、`opencode`、`xai` 不暴露 | 与 Multi 的 `openai`（Codex 登录）、`zen`（同一服务）、`grok`（语义不同）冲突 |
 | D-D | 独立 `multi-pi` 插件，依赖精确 pin 在根 `package.json` | 仓库没有 per-plugin `package.json`；插件清单只是开关，代码随 core 一起发布（§9） |
-| D-E | 凭据只读环境变量，不读 Pi 文件 | `auth.json` 的 key 可以是解析时会执行的 `!command`；解析它还要依赖 23.4 MB 的 `pi-coding-agent` |
+| D-E | 凭据只读环境变量，不读 Pi 文件（已被 `pi-config-credentials` 变更取代：环境变量优先，其次由 launcher 读取 Pi 配置，见 docs/pi.md） | `auth.json` 的 key 可以是解析时会执行的 `!command`；解析它还要依赖 23.4 MB 的 `pi-coding-agent` |
 | D-F | 每个 route provider 一个 worker | 与 PRD §38 一致；新增 4 个（含 Strata），由 §11 的 `--agents` 预算测试把关 |
 | D-G | 新模块留在 `gw/`，不建 PRD §42 的 `providers/` 目录 | 遵守 AGENTS.md 的现有约定，减少 upstream 冲突面 |
 | D-H | Direct 契约从现有 `PreparedRequest` 演进，不另造 `prepare + execute` | 现有边界已把 keepalive、事件、失败映射留在 gateway，只差事件流后端（§8） |
@@ -344,6 +344,8 @@ Pi 包无 install script、ESM、MIT、`engines` ≥22.19，与仓库的 ≥24.1
 ---
 
 # 10. 凭据
+
+> 更新：`pi-config-credentials` 变更后，环境变量未设置时由 launcher 读取 `~/.pi/agent/auth.json`、`models.json`（`MULTI_PI_CONFIG=0` 关闭，不执行 `!command`）。下表“不读”一列只对 Pi 后端本身和 cwd 下的 `auth.json` 仍然成立。
 
 | Provider | 环境变量 | 不读 |
 | --- | --- | --- |
@@ -632,7 +634,7 @@ autoReview: { review: 'none', statement: 'no auto mode: actions run unreviewed' 
 
 每条都有对应测试（§19）。
 
-1. Multi 不读 `~/.pi/agent/*`，不依赖 `pi-coding-agent`。
+1. Pi 后端不读 `~/.pi/agent/*`，不依赖 `pi-coding-agent`；只有 launcher 在 `MULTI_PI_CONFIG` 未关闭时读取 Pi 配置中的密钥和 Strata 地址，且不执行 `!command`。
 2. 密钥不出现在：Claude child env、Bash、harness 子进程 env、`GatewayEvent`、receipt、trace、错误消息、`--agents`、`ModelDescriptor.metadata`。
 3. 上游响应体不进入日志或错误消息。
 4. 除 `baseUrl` 主机外，一次请求不访问其他主机（fixture 用 fetch 记录断言）。这也同时验证 Pi 没有遥测外发。

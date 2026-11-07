@@ -56,7 +56,7 @@ changes. Provider limitations are not permanent bans on requested new features;
 changes to those boundaries need corresponding implementation and verification.
 
 - Claude's permission mode controls every provider at prompt boundaries.
-- Each provider owns its login, reviewer, execution state, and credentials. Pi-backed DeepSeek and GLM credentials come from their provider-specific environment variables; Strata is enabled by `MULTI_STRATA_BASE_URL`; `STRATA_API_KEY` is optional for loopback URLs and required otherwise, and any valid key supplied is used even for loopback. Loopback without a key uses a placeholder credential. Do not infer provider credentials or configuration from local Pi files.
+- Each provider owns its login, reviewer, execution state, and credentials. Pi-backed DeepSeek and GLM credentials come from their provider-specific environment variables; Strata is enabled by `MULTI_STRATA_BASE_URL`; `STRATA_API_KEY` is optional for loopback URLs and required otherwise, and any valid key supplied is used even for loopback. Loopback without a key uses a placeholder credential. When a Pi provider's environment variable is unset, its key (and Strata's base URL) may come from the user's Pi config (`auth.json`, `models.json` under `PI_CODING_AGENT_DIR` or `~/.pi/agent`), read only by the launcher in `plugins/multi-pi/src/pi-config.ts`; `MULTI_PI_CONFIG=0` disables it. Never execute `!command` values, never let the Pi backend read Pi files, and fail on ambiguous Pi credentials.
 - Fail explicitly on unsupported modes, unknown workers, or ambiguous ownership.
 - A provider without a reviewer runs auto mode unreviewed and says so; plan mode still refuses actions.
 - Never replay external tool events as executable Claude tools.

@@ -10,6 +10,18 @@ function matchingEnvironmentKeys(
   );
 }
 
+/** Deletes every spelling of `names` from `env` in place (case-insensitive on Windows). */
+export function deleteEnvironmentKeys(
+  env: NodeJS.ProcessEnv,
+  names: readonly string[],
+  options: { platform?: NodeJS.Platform } = {},
+): void {
+  const platform = options.platform ?? process.platform;
+  for (const key of names.flatMap((name) => matchingEnvironmentKeys(env, name, platform))) {
+    delete env[key];
+  }
+}
+
 export function withoutProviderCredentials(
   env: NodeJS.ProcessEnv,
   names: readonly string[],

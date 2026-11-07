@@ -35,6 +35,9 @@ import { grokEnvironment, runGrok } from '../../plugins/multi-grok/src/cli.ts';
 import { PI_DEEPSEEK_MODELS } from '../../plugins/multi-pi/src/catalog.ts';
 import { removeTemporary } from '../temporary.ts';
 
+// Unit tests never read the developer's real Pi config.
+const NO_PI_CONFIG = { readFile: () => undefined };
+
 function context(
   explicit: boolean,
   log: (message: string) => void = () => {},
@@ -253,6 +256,7 @@ test('main expands plugin selection pi into all providers and activates DeepSeek
   let launchedDiscovery: Awaited<ReturnType<typeof discoverLaunchProviders>> | undefined;
   let selectedIds: readonly string[] | undefined;
   await main({
+    piConfig: NO_PI_CONFIG,
     env,
     platform: 'linux',
     args: [],
@@ -343,6 +347,7 @@ test('MULTI_MODELS=all picker output stays within the curated DeepSeek allowlist
     }});
     const { main } = await import('./plugins/multi-core/src/launcher.ts');
     await assert.rejects(main({
+      piConfig: { readFile: () => undefined },
       env: {
         MULTI_MODELS: 'all',
         MULTI_ENABLED_PROVIDERS: 'pi',
@@ -728,6 +733,7 @@ test('main scrubs the real host before help and every startup probe, forwarding 
   const reached: string[] = [];
   try {
     await main({
+      piConfig: NO_PI_CONFIG,
       env: process.env,
       platform: 'win32',
       args: ['--help'],
@@ -743,6 +749,7 @@ test('main scrubs the real host before help and every startup probe, forwarding 
 
     process.env.OPENCODE_API_KEY = 'owned-secret';
     await main({
+      piConfig: NO_PI_CONFIG,
       env: process.env,
       platform: 'win32',
       args: [],
@@ -902,6 +909,7 @@ test('Pi keys are scrubbed before Claude and provider harness spawn boundaries',
         const cleanSnapshot = Object.fromEntries(names.map(name => [name, false]));
         const snapshot = () => Object.fromEntries(names.map(name => [name, typeof process.env[name] === 'string']));
         await main({
+          piConfig: { readFile: () => undefined },
           args: [],
           hooks: {
             versionProbe: async () => {},

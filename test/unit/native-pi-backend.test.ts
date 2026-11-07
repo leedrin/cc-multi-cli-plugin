@@ -70,6 +70,7 @@ test('only ZAI key loads only the ZAI provider in a child process', () => {
   assert.doesNotMatch(result.stderr, /all\.js|deepseek\.js|zai-coding-cn\.js/);
 });
 
+// The Pi backend itself never reads Pi files; only the launcher does (pi-config-launch.test.ts).
 test('keyless DeepSeek ignores Pi auth files under isolated HOME and USERPROFILE', async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'multi-deepseek-home-'));
   const piDir = path.join(home, '.pi', 'agent');
@@ -137,6 +138,7 @@ test('keyless DeepSeek ignores Pi auth files under isolated HOME and USERPROFILE
   }
 });
 
+// The Pi backend itself never reads Pi files; only the launcher does (pi-config-launch.test.ts).
 test('Strata backend confines imports, avoids home Pi files, and sends the curated request', async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'multi-strata-home-'));
   const piDir = path.join(home, '.pi', 'agent');

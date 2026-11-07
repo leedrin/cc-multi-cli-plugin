@@ -20,7 +20,18 @@ DeepSeek, Z.AI, and Strata are direct providers: Claude Code continues to run to
    The two Z.AI endpoints are coding-plan endpoints, not pay-as-you-go API endpoints. Each credential enables only its corresponding provider; set the variables for the providers you want to use. Strata is enabled by its base URL, not by its key.
 3. Relaunch the session so the providers are discovered.
 
-There is no `/multi-pi:connect` command or interactive key-entry flow. Multi reads credentials during startup, removes them from its process environment, and passes each only in memory to its owning provider. They are not passed to provider/harness child processes or Claude's plugin-list probe. Multi does not read `~/.pi/` or Pi's local auth files.
+There is no `/multi-pi:connect` command or interactive key-entry flow. Multi reads credentials during startup, removes them from its process environment, and passes each only in memory to its owning provider. They are not passed to provider/harness child processes or Claude's plugin-list probe.
+
+### Credentials from Pi config
+
+When one of the variables above is unset or blank, Multi falls back to your Pi config. Environment variables always win.
+
+- Directory: `PI_CODING_AGENT_DIR` if set, otherwise `~/.pi/agent`. Only `auth.json` and `models.json` there are read, once at launch; never a working-directory `auth.json`. Restart `claude-multi` after editing them.
+- `auth.json`: entries keyed `deepseek`, `zai` or `zai-coding-cn` with `"type": "api_key"` supply `key`. OAuth entries are ignored.
+- `models.json`: a `providers` entry whose `baseUrl` equals a provider's upstream (`https://api.deepseek.com`, `https://api.z.ai/api/coding/paas/v4`, `https://open.bigmodel.cn/api/coding/paas/v4`) supplies its `apiKey`, whatever the entry is named. The entry named `strata` supplies Strata's `apiKey` and `baseUrl`; `MULTI_STRATA_BASE_URL` still wins. Other entries are ignored.
+- A value may be a literal key or the name of a set environment variable (as in Pi); an adopted variable is removed from the environment like the credential variables. `!command` values fail and are never run.
+- Two different values for one provider fail at launch, naming the provider; set its environment variable to choose. A missing directory or file is skipped; a malformed file fails naming only the file.
+- `MULTI_PI_CONFIG=0` turns this off: no Pi file is opened. Pi files are never read when `multi-pi` is not enabled, and the Pi backend itself never reads them.
 
 ## Models
 
@@ -84,7 +95,7 @@ Claude Code owns the tool loop and applies its permission mode. DeepSeek, GLM, a
 
 - Requests go only to the configured Strata origin or the corresponding DeepSeek/GLM upstream origin. Redirects are rejected; the adapter does not retry requests (`maxRetries: 0`).
 - DeepSeek and GLM backends are loaded lazily when their corresponding credentials are present. Strata is enabled by `MULTI_STRATA_BASE_URL` and uses the Pi backend only when a request is opened; its key is required only for non-loopback addresses.
-- Multi does not read `~/.pi/`, Pi's `models.json`, or `auth.json`; Strata's model and connection settings come from the curated catalog and Multi environment variables.
+- Only the launcher reads Pi's `auth.json` and `models.json`, and only keys and Strata's base URL (see [Credentials from Pi config](#credentials-from-pi-config)); Strata's model settings come from the curated catalog.
 - Session usage follows provider-reported usage observed from the response stream. If the upstream omits usage, it is recorded as unavailable, not zero; token estimates used for `count_tokens` are local estimates, not account billing. Strata exposes no account quota reader; per-run usage appears in session receipts.
 - `glm-5.3` declares no `off` thinking level in the curated catalog, but Pi still sends `thinking: disabled`; whether the upstream accepts this remains to be confirmed by a live check.
 - GLM and Strata have only been verified with offline fixtures so far. The opt-in Pi live report records the actual effort (GLM Coding CN uses `high`); the other GLM endpoint remains offline-verified only. Strata live acceptance is separate and does not block the milestone.

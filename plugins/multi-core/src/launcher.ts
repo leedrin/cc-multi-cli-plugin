@@ -49,6 +49,11 @@ import { discoverOpenAI } from '../../multi-openai/src/provider.ts';
 import { openAIUsageReader } from '../../multi-openai/src/usage-adapter.ts';
 import { filterPiModelsForProvider } from '../../multi-pi/src/catalog.ts';
 import {
+  type PiConfigFileReader,
+  piConfigDirectory,
+  readPiConfigCredentials,
+} from '../../multi-pi/src/pi-config.ts';
+import {
   PI_PROVIDERS,
   strataUrlUsesLoopback,
   validatedPiKey,
@@ -84,7 +89,7 @@ import { PermissionModes } from './gateway/mode-hook.ts';
 import { decodeModelRoute, encodeModelRoute } from './gateway/model-identity.ts';
 import { nestedClaudeShim, withPathPrefix } from './gateway/nested-env.ts';
 import { nativeSpelling } from './gateway/provider.ts';
-import { takeProviderCredentials } from './gateway/provider-credentials.ts';
+import { deleteEnvironmentKeys, takeProviderCredentials } from './gateway/provider-credentials.ts';
 import { PROVIDER_FACTS, type ProviderId } from './gateway/provider-facts.ts';
 import {
   type ActiveProvider,
@@ -169,6 +174,61 @@ function validatePiModelSelection(
   if (hasPiKey || strataUrl) {
     filterPiModelsForProvider('deepseek', env.MULTI_PI_MODELS);
   }
+}
+
+export interface PiConfigLaunchOptions {
+  platform?: NodeJS.Platform;
+  homedir?: string;
+  readFile?: PiConfigFileReader;
+  log?: (message: string) => void;
+}
+
+/**
+ * Fills Pi provider credentials the environment left unset from the user's Pi config.
+ * Adopted keys go into `credentials`; adopted `apiKey` environment references are deleted
+ * from `env`. A Strata URL from Pi config is returned only in a discovery copy of `env`,
+ * never written back, so children never inherit it.
+ */
+export function applyPiConfigCredentials(
+  env: NodeJS.ProcessEnv,
+  credentials: Map<string, string>,
+  descriptors: readonly Pick<ProviderDescriptor, 'id'>[],
+  options: PiConfigLaunchOptions = {},
+): NodeJS.ProcessEnv {
+  const enabled = PI_PROVIDERS.filter(({ id }) => descriptors.some((d) => d.id === id));
+  if (enabled.length === 0 || env.MULTI_PI_CONFIG?.trim() === '0') {
+    return env;
+  }
+  const providers = enabled
+    .filter(
+      ({ credentialEnv }) =>
+        !validatedPiKey(effectiveCredentialValue(credentialEnv, env, credentials)),
+    )
+    .map(({ id }) => id);
+  const needsStrataUrl =
+    enabled.some(({ id }) => id === 'strata') && !env.MULTI_STRATA_BASE_URL?.trim();
+  const result = readPiConfigCredentials({
+    env,
+    providers,
+    strataBaseUrl: needsStrataUrl,
+    platform: options.platform,
+    homedir: options.homedir,
+    readFile: options.readFile,
+  });
+  for (const [name, value] of result.credentials) {
+    credentials.set(name, value);
+  }
+  deleteEnvironmentKeys(env, result.consumedEnv, { platform: options.platform });
+  const adopted = [...result.sources, ...(result.strataBaseUrl ? ['strata base URL'] : [])];
+  if (adopted.length > 0) {
+    const directory = piConfigDirectory(env, options.homedir);
+    (options.log ?? console.error)(
+      `Multi: credentials from Pi config (${directory}): ${adopted.join(', ')}.`,
+    );
+  }
+  return result.strataBaseUrl === undefined
+    ? env
+    : { ...env, MULTI_STRATA_BASE_URL: result.strataBaseUrl };
 }
 
 function collectGenericModels(
@@ -339,6 +399,8 @@ interface LauncherMainOptions {
   platform?: NodeJS.Platform;
   args?: string[];
   hooks?: LauncherMainHooks;
+  /** Test seams for Pi config reading; `platform` defaults to the launcher's. */
+  piConfig?: Omit<PiConfigLaunchOptions, 'platform'>;
 }
 
 async function runLauncherCommand(
@@ -413,6 +475,10 @@ export async function main(options: LauncherMainOptions = {}): Promise<void> {
     .list()
     .filter(({ id }) => selectedProviders === undefined || selectedProviders.includes(id));
   const credentials = takeProviderCredentials(env, credentialDescriptors, { platform });
+  const discoveryEnv = applyPiConfigCredentials(env, credentials, credentialDescriptors, {
+    platform,
+    ...options.piConfig,
+  });
   if (await handleEarlyLauncherCommand(args, hooks)) {
     return;
   }
@@ -424,7 +490,7 @@ export async function main(options: LauncherMainOptions = {}): Promise<void> {
   const { pluginInventory, anthropic, discovered } = await runLauncherProbes({
     args,
     credentials,
-    env,
+    env: discoveryEnv,
     hooks,
     platform,
     selectedProviders,
