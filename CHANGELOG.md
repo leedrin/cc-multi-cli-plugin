@@ -4,6 +4,12 @@ Entries record changes when they were made, including superseded decisions.
 See [ARCHITECTURE.md](ARCHITECTURE.md) for current direction and
 [README.md](README.md) for current capabilities.
 
+## 0.4.1-pi.3 — 2026-11-08
+
+Shorter /model names for Pi providers
+
+- **Shorter `/model` names for Pi providers.** DeepSeek, GLM and Strata rows now read like the OpenAI rows, for example `DeepSeek-DeepSeek-V4-Pro`, `ZAI-GLM-5.3` (Z.AI Coding CN), `ZAI-Intl-GLM-5.3` (international Z.AI) and `Strata-Qwen-3.8-Flash-Next`. Model routes, descriptions and error messages are unchanged.
+
 ## 0.4.1-pi.2 — 2026-11-07
 
 Read Pi provider credentials from Pi config
