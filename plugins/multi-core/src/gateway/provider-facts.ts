@@ -15,6 +15,8 @@ interface ProviderFact {
   kind: 'direct' | 'harness';
   worker: string;
   label: string;
+  /** Compact `/model` picker prefix; rows read `<prefix>-<Model-Name>`. */
+  pickerPrefix?: string;
   credentialEnv?: readonly string[];
 }
 
@@ -43,6 +45,7 @@ export const PROVIDER_FACTS: readonly ProviderFact[] = [
     kind: 'direct',
     worker: 'multi-deepseek',
     label: 'DeepSeek',
+    pickerPrefix: 'DeepSeek',
     credentialEnv: ['DEEPSEEK_API_KEY'],
   },
   {
@@ -51,6 +54,7 @@ export const PROVIDER_FACTS: readonly ProviderFact[] = [
     kind: 'direct',
     worker: 'multi-zai',
     label: 'Z.AI',
+    pickerPrefix: 'ZAI-Intl',
     credentialEnv: ['ZAI_API_KEY'],
   },
   {
@@ -59,6 +63,7 @@ export const PROVIDER_FACTS: readonly ProviderFact[] = [
     kind: 'direct',
     worker: 'multi-zai-coding-cn',
     label: 'Z.AI Coding (CN)',
+    pickerPrefix: 'ZAI',
     credentialEnv: ['ZAI_CODING_CN_API_KEY'],
   },
   {
@@ -67,6 +72,7 @@ export const PROVIDER_FACTS: readonly ProviderFact[] = [
     kind: 'direct',
     worker: 'multi-strata',
     label: 'Strata',
+    pickerPrefix: 'Strata',
     credentialEnv: ['STRATA_API_KEY'],
   },
 ] as const;

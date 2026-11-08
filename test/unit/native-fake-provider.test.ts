@@ -95,13 +95,13 @@ test('a generic Strata descriptor reaches picker, worker, runtime, and productio
   assert.deepEqual(settings.modelPicker.options, [
     {
       model: 'multi/strata/fixture-one',
-      label: 'Strata · Fixture One',
+      label: 'Strata-Fixture-One',
       description: 'First Strata fixture',
       behavesAs: 'claude-haiku-4-5',
     },
     {
       model: 'multi/strata/fixture-two',
-      label: 'Strata · Fixture Two',
+      label: 'Strata-Fixture-Two',
       description: 'Second Strata fixture',
       behavesAs: 'claude-haiku-4-5',
     },

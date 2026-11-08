@@ -591,7 +591,7 @@ test('generic launcher picker creates model rows with shared route encoding and 
   assert.deepEqual(settings.modelPicker.options, [
     {
       model: 'multi/strata/model%2Fa',
-      label: 'Strata · Model A',
+      label: 'Strata-Model-A',
       description: 'Custom endpoint',
       behavesAs: 'claude-sonnet-4-6',
     },
@@ -1186,10 +1186,10 @@ test('generic picker appends fact-ordered provider models with fallback descript
       behavesAs,
     ]),
     [
-      ['multi/deepseek/d1', 'DeepSeek · Deep One', 'DeepSeek · Claude tools', 'claude-haiku-4-5'],
-      ['multi/deepseek/d2', 'DeepSeek · Deep Two', 'DeepSeek · Claude tools', 'claude-sonnet-4-6'],
-      ['multi/strata/s1', 'Strata · Strata One', 'Strata · Claude tools', 'claude-haiku-4-5'],
-      ['multi/strata/s2', 'Strata · Strata Two', 'Strata · Claude tools', 'claude-sonnet-4-6'],
+      ['multi/deepseek/d1', 'DeepSeek-Deep-One', 'DeepSeek · Claude tools', 'claude-haiku-4-5'],
+      ['multi/deepseek/d2', 'DeepSeek-Deep-Two', 'DeepSeek · Claude tools', 'claude-sonnet-4-6'],
+      ['multi/strata/s1', 'Strata-Strata-One', 'Strata · Claude tools', 'claude-haiku-4-5'],
+      ['multi/strata/s2', 'Strata-Strata-Two', 'Strata · Claude tools', 'claude-sonnet-4-6'],
     ],
   );
 });

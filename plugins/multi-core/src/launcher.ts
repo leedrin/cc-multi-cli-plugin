@@ -1540,7 +1540,7 @@ export function pickerSettings(
       }
       return models.map((model) => ({
         model: encodeModelRoute(model.identity.providerId, model.identity.modelId),
-        label: `${fact.label} · ${model.label}`,
+        label: `${fact.pickerPrefix ?? fact.label}-${model.label.trim().replace(/\s+/g, '-')}`,
         description:
           model.description ??
           `${fact.label} · ${fact.kind === 'direct' ? 'Claude tools' : 'native harness'}`,
